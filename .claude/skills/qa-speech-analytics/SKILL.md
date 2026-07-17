@@ -103,6 +103,13 @@ fornecedor (`.md`+`.docx`, com `CASE_ID`/data/hora/telefone/padrão/trechos-prov
 Pipeline diário: `run_daily.py` (coletar → analisar → sintetizar → entregar) — scripts em `coral_qa/`
 na máquina do operador (não neste sandbox).
 
+## Scripts incluídos
+- **`scripts/ab_asr_vendor.py`** — A/B do fornecedor de ASR por corte de horário dentro do dia,
+  normalizado pelo **cohort da oferta**. **PII-safe** (só agregados + `CASE_ID`). Roda na máquina
+  do operador sobre os logs coletados; devolve NO_MATCH/chamada, captura limpa do termo decisivo e
+  termo no n-best, OLD×NEW. `--campaign 1737` (Bronze) · `--cutoff 10:00` · `--peek N` (calibrar
+  o parser sem expor PII antes de confiar no A/B). Não usa acordo (0 por construção).
+
 ## Checklist antes de reportar QUALQUER número
 - [ ] Campanha por `@CAMPAIGNID` (não credor)?
 - [ ] Métrica determinística feita por regra (não LLM)?
