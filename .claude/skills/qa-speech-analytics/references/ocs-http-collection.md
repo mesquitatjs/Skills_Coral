@@ -11,14 +11,35 @@ Descoberto em produção (17/07/2026) rodando o A/B de fornecedor de ASR direto 
   `{callResultId, bytesIni}` → `{log, ended, nextBytes}` (paginar por bytes até `ended`). Rápido e limpo.
 - **Lista de chamadas:** a grade traz `callResultId="..."` por linha; `Campanha` e `Última Interação` em `<td>`.
 
-## O que NÃO funciona por HTTP (armadilha)
-- **Filtro de CAMPANHA (`ddlCampaigns`) e de LOTE (`ddlLot`) NÃO colam** postando o valor do `<select>`.
-  É widget **jQuery `multipleSelect`**; a seleção é client-side e o servidor ignora o valor postado
-  (testado: POST do select, async postback UpdatePanel, e disparar os AJAX `getInteraction`/`GetLotsByCampaign`
-  antes — todos voltam TODAS as campanhas). No browser funciona (por isso a coleta oficial usa Chrome).
-- **Workaround que funciona:** **fatiar o período em blocos curtos** (30 min — dados passados são imutáveis,
-  sem o problema do "ao vivo"), paginar cada fatia e **filtrar a campanha no cliente** pela coluna Campanha.
-  Ver `scripts/ocs_http/collect_day.py` (auto-relogin embutido; a sessão expira em runs longos).
+## Filtros — o servidor lê HIDDEN, não os controles (CORRIGIDO 20/07/2026)
+A armadilha era postar o valor do `<select>` (`ddlCampaigns`/`ddlInteractionsFinal`): o servidor
+**ignora os controles**. O botão **Buscar** sincroniza a seleção para **campos hidden** por JS, e é
+esses que o servidor lê. Basta postar os hidden certos e o filtro cola **server-side**:
+
+| Filtro | Controle (ignorado) | HIDDEN a postar (funciona) | Valor |
+|--------|---------------------|----------------------------|-------|
+| **Campanha** | `ddlCampaigns` (widget multipleSelect) | **`hdListCpnId`** | id da campanha — Bronze **1737** · Ouro 1673 · PrincipiaPay 1741 |
+| **Última Interação** | `ddlInteractionsFinal` | **`hdInteracaoFinal`** | `interactionID` (ver getInteraction) |
+| Interações (multi) | `ddlInteractions` | `hdInteractions` | — |
+| Lote | `ddlLot` | `hdListIdLot` | — |
+
+Prova (17/07): `hdListCpnId=1737` → **100% Bronze** (sem vazamento); `hdInteracaoFinal=2439` →
+**100% "Ligação Abandonada"**. A coleta antiga postava `ddlCampaigns` (ignorado) e filtrava no
+cliente — daí o vazamento de outras campanhas.
+
+**Opções de Última Interação** (dependem da campanha): PageMethod
+`POST callResultInteractions.aspx/getInteraction` com body `{campaigns: <id>}` (Content-Type JSON) →
+`data.d = [{interactionID, interactionName}]`. Ex. Bronze: 41 opções (1006=VALIDOU CPF,
+2439=Ligação Abandonada, 2318=RECUSA TODAS…). A **última coluna** da grade é a "Última Interação".
+
+## Paginação quebrada → subdivisão adaptativa do tempo
+A paginação async do GridView **não avança** (a "página 2" volta um subconjunto da página 1). Em vez
+de paginar, **subdivide a janela de tempo** recursivamente: qualquer janela que encoste no teto de
+página (20 linhas) ou exiba pager é dividida ao meio até caber numa página (1 busca = 1 página, nada
+truncado). Bronze roda ~14/10min, ~20/30min. Ver `scripts/ocs_http/collect_day.py` (auto-relogin;
+salva incremental por hora; assert de 0-vazamento e de homogeneidade da última interação).
+
+Uso: `python collect_day.py <YYYY-MM-DD> <saida.json> [cpnId=1737] [interacaoFinalId] [hIni=10] [hFim=12]`
 
 ## Achados de QA (17/07/2026)
 - **O log NÃO carimba o fornecedor de ASR.** A transcrição vem via `api.coralai.com.br/api/provider/...`
