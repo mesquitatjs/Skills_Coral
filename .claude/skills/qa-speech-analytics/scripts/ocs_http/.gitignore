@@ -1,0 +1,9 @@
+# Artefatos de runtime da coleta OCS — NUNCA versionar.
+# ocs_session.pkl carrega cookie de sessão autenticada (.ASPXAUTH) e
+# search_page.html / *.json / logs carregam PII (nomes, telefones) da grade.
+ocs_session.pkl
+search_page.html
+*.pkl
+*.html
+*.json
+logs/
