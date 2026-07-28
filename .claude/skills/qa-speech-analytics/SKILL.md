@@ -104,6 +104,20 @@ Pipeline diário: `run_daily.py` (coletar → analisar → sintetizar → entreg
 na máquina do operador (não neste sandbox).
 
 ## Scripts incluídos
+- **`scripts/ocs_http/fingerprint_fluxo.py`** — **QA passivo (Fase 0)**: retrato do fluxo por
+  campanha/dia (falas do bot, janela de captura por nó, se o nó chama o ASR, falha por nó) e
+  **diff contra o baseline** — acusa deploy de script, nó novo/renomeado/sumido, janela de captura
+  alterada e variação de falha **estatisticamente significativa** (z de duas proporções). Sai com
+  código 2 quando há regressão, para encadear em alerta. Fingerprint é **PII-safe** (falas
+  canonizadas; instância resolvida de template é descartada) → versionável em git.
+  `--logs <dir> --saida fp/ [--comparar fp/X.json]` · `--diff ANTES AGORA` · `--contem` para
+  recortar pós-deploy.
+  > Nasceu do deploy do PPay em 28/07/2026, que trocou textos **sem mudar um único ID de nó** e
+  > não disparou nada. Regras que o script embute e que já custaram números errados:
+  > (1) o nó de uma gravação é o `Process node` **ANTERIOR** ao `RecordTemp audio`;
+  > (2) gravação sem `Transcription` pode ser nó de **VAD puro** (o `(288)` grava toda chamada e
+  > nunca transcreve) — contar como falha dobra a taxa global;
+  > (3) ausência só é notícia quando havia amostra para ver (corte: esperado ≥ 5 sob a taxa antiga).
 - **`scripts/ab_asr_vendor.py`** — A/B do fornecedor de ASR por corte de horário dentro do dia,
   normalizado pelo **cohort da oferta**. **PII-safe** (só agregados + `CASE_ID`). Roda na máquina
   do operador sobre os logs coletados; devolve NO_MATCH/chamada, captura limpa do termo decisivo e
