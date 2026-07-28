@@ -169,10 +169,13 @@ def main():
     colunas = COLUNAS_MAX if args.indice_completo else COLUNAS_MIN
 
     ja = set()
-    if os.path.exists(indice):                        # retomável: não refaz o que já saiu
+    if os.path.exists(indice):
+        # Retomável pelo ARQUIVO em disco, não pela linha do índice: linha sem WAV
+        # correspondente não é trabalho feito (ex.: índice de um --dry-run anterior).
         with open(indice, encoding="utf-8") as fh:
-            ja = {r["cid"] for r in csv.DictReader(fh)}
-        log(f"[retomada] {len(ja)} chamadas já no índice")
+            ja = {r["cid"] for r in csv.DictReader(fh)
+                  if r.get("arquivo") and os.path.exists(r["arquivo"])}
+        log(f"[retomada] {len(ja)} chamadas com áudio já em disco")
 
     env = _env()
     s = requests.Session()
@@ -210,7 +213,9 @@ def main():
                     meta["arquivo"] = destino; meta["bytes"] = tam
                 else:
                     n_erro += 1
-        if meta:
+        # dry-run NÃO escreve o índice: senão a execução real seguinte enxerga
+        # essas linhas como já processadas e não baixa nada.
+        if meta and not args.dry_run:
             w.writerow(meta); fh.flush()             # grava a cada item: queda não perde nada
         if i % 25 == 0 or i == len(cids):
             log(f"  {i}/{len(cids)} — ok={n_ok} sem_audio={n_sem} erro={n_erro} "
