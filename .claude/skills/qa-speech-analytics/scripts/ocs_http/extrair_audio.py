@@ -41,6 +41,15 @@ TENTATIVAS = 4
 log = lambda m: print(m, flush=True)
 
 
+# Marcador de sessão ativa na monitoração. O portal renomeou o seletor de campanha
+# `ddlCampaigns` → `ddlCampanha` (visto em 29/07/2026). Como ele era usado como PROVA de
+# login, a renomeação fez o script autenticar com sucesso e mesmo assim reportar
+# "login FALHOU" — derrubando 5 campanha-dias de coleta por diagnóstico errado.
+# Aceita os dois nomes: se o portal reverter, ou se coexistirem, continua funcionando.
+def _logado(html: str) -> bool:
+    return ("ddlCampanha" in html) or ("ddlCampaigns" in html)
+
+
 def _env():
     env = {}
     for line in open(ENV):
@@ -60,7 +69,7 @@ def entrar(s, env):
         "__VIEWSTATEGENERATOR": hid("__VIEWSTATEGENERATOR"),
         "__EVENTVALIDATION": hid("__EVENTVALIDATION"),
         "txtUsuario": env["OCS_USER"], "txtSenha": env["OCS_PASS"], "btnLogar": "Entrar"})
-    return "ddlCampaigns" in s.get(URL, timeout=40).text
+    return _logado(s.get(URL, timeout=40).text)
 
 
 def _com_retry(fn, desc, s, env):

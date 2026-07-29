@@ -5,6 +5,15 @@ ROWS, LABEL, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 env=dict(l.strip().split("=",1) for l in open(os.path.expanduser("~/.ocs.env")) if "=" in l)
 S=requests.Session();S.headers.update({"User-Agent":"Mozilla/5.0","Connection":"close"})
 JH={"Content-Type":"application/json; charset=utf-8","X-Requested-With":"XMLHttpRequest"}
+# Marcador de sessão ativa na monitoração. O portal renomeou o seletor de campanha
+# `ddlCampaigns` → `ddlCampanha` (visto em 29/07/2026). Como ele era usado como PROVA de
+# login, a renomeação fez o script autenticar com sucesso e mesmo assim reportar
+# "login FALHOU" — derrubando 5 campanha-dias de coleta por diagnóstico errado.
+# Aceita os dois nomes: se o portal reverter, ou se coexistirem, continua funcionando.
+def _logado(html: str) -> bool:
+    return ("ddlCampanha" in html) or ("ddlCampaigns" in html)
+
+
 def hid(h):
     d={}
     for t in re.findall(r'<input[^>]*type="hidden"[^>]*>',h,re.I):
@@ -14,7 +23,7 @@ def hid(h):
 def login():
     r=S.get(LOGIN,timeout=40);d=hid(r.text)
     d.update({"txtUsuario":env["OCS_USER"],"txtSenha":env["OCS_PASS"],"btnLogar":"Entrar"})
-    S.post(LOGIN,data=d,timeout=40); return "ddlCampaigns" in S.get(URL,timeout=40).text
+    S.post(LOGIN,data=d,timeout=40); return _logado(S.get(URL,timeout=40).text)
 def getlog(cid):
     full="";b=0
     for _ in range(50):

@@ -40,6 +40,15 @@ IFINAL=sys.argv[4] if len(sys.argv)>4 else ""     # última interação (opciona
 HINI=int(sys.argv[5]) if len(sys.argv)>5 else 10
 HFIM=int(sys.argv[6]) if len(sys.argv)>6 else 12
 
+# Marcador de sessão ativa na monitoração. O portal renomeou o seletor de campanha
+# `ddlCampaigns` → `ddlCampanha` (visto em 29/07/2026). Como ele era usado como PROVA de
+# login, a renomeação fez o script autenticar com sucesso e mesmo assim reportar
+# "login FALHOU" — derrubando 5 campanha-dias de coleta por diagnóstico errado.
+# Aceita os dois nomes: se o portal reverter, ou se coexistirem, continua funcionando.
+def _logado(html: str) -> bool:
+    return ("ddlCampanha" in html) or ("ddlCampaigns" in html)
+
+
 def hid(h):
     d={}
     for t in re.findall(r'<input[^>]*type="hidden"[^>]*>',h,re.I):
@@ -51,11 +60,11 @@ def login():
     d.update({"txtUsuario":env["OCS_USER"],"txtSenha":env["OCS_PASS"],
               "btnLogar":(re.search(r'name="btnLogar"[^>]*value="([^"]*)"',r.text) or [None,"Entrar"])[1]})
     S.post(LOGIN,data=d,timeout=40,allow_redirects=True)
-    ok="ddlCampaigns" in S.get(URL,timeout=40).text
+    ok=_logado(S.get(URL,timeout=40).text)
     log("  login "+("OK" if ok else "FALHOU")); return ok
 def get_page():
     r=S.get(URL,timeout=40)
-    if "txtSenha" in r.text or "ddlCampaigns" not in r.text:
+    if "txtSenha" in r.text or not _logado(r.text):
         log("  sessao caiu -> relogin"); login(); r=S.get(URL,timeout=40)
     return r.text
 def post(data,tries=4):

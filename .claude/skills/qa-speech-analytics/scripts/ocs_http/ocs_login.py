@@ -16,6 +16,15 @@ if not u or not p:
 S = requests.Session()
 S.headers.update({"User-Agent": "Mozilla/5.0 (QA collector)"} )
 
+# Marcador de sessão ativa na monitoração. O portal renomeou o seletor de campanha
+# `ddlCampaigns` → `ddlCampanha` (visto em 29/07/2026). Como ele era usado como PROVA de
+# login, a renomeação fez o script autenticar com sucesso e mesmo assim reportar
+# "login FALHOU" — derrubando 5 campanha-dias de coleta por diagnóstico errado.
+# Aceita os dois nomes: se o portal reverter, ou se coexistirem, continua funcionando.
+def _logado(html: str) -> bool:
+    return ("ddlCampanha" in html) or ("ddlCampaigns" in html)
+
+
 def hid(name, html):
     m = (re.search(r'id="' + name + r'"[^>]*value="([^"]*)"', html) or
          re.search(r'name="' + name + r'"[^>]*value="([^"]*)"', html))
@@ -35,7 +44,7 @@ data = {
 r2 = S.post(LOGIN, data=data, timeout=40, allow_redirects=True)
 
 tgt = S.get(BASE + "callResultInteractions.aspx", timeout=40)
-has_campaigns = "ddlCampaigns" in tgt.text
+has_campaigns = _logado(tgt.text)
 still_login   = ("txtSenha" in tgt.text) or ("txtUsuario" in tgt.text)
 ok = has_campaigns and not still_login
 
