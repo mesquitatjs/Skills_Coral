@@ -66,6 +66,33 @@ python3 scripts/ucc_calc.py --cpfs 12000 --regua 4 --wa 1 --sms 2 \
 Se o deal tem implantação ou posição humana: `--setup 60000 --setup-meses 12` (amortiza) e
 `--pas 1 --pa-custo 10000` (transbordo). Os dois entram como **capacidade**.
 
+### Abra a carteira por faixa de atraso sempre que o credor mandar o aging
+
+```bash
+python3 scripts/ucc_calc.py --faixas scripts/faixas_exemplo.json \
+        --regua 3 --wa 5 --sms 2 --email 1 --alvo 20 --cliente "Nome" --saida planilha.md
+```
+
+Com `--faixas` a base sai da soma das faixas (o `--cpfs` é ignorado) e a planilha ganha duas
+seções: **Merecimento por faixa** e a **DRE** com a receita variável da tabela do credor.
+
+O JSON é uma lista; cada faixa precisa de **`cpfs` e `carteira`**, e aceita `meta` (recuperação
+**observada** daquela faixa sobre a carteira dela, em %), `aliq` (alíquota do credor, em %) e
+cadência própria (`regua`/`wa`/`sms`/`email`, que herdam o contrato quando ausentes). Modelo em
+`scripts/faixas_exemplo.json`; o contrato de referência está em `scripts/faixas_referencia.json`.
+
+⛔ **`cpfs` por faixa é obrigatório e o script recusa sem ele.** O aging costuma vir só com saldo
+em R$, e o custo escala com CPF — ratear os CPFs proporcionalmente ao saldo assume ticket médio
+uniforme, que o próprio aging desmente (na Cayena o ticket varia 4× entre faixas). **Peça ao
+credor.**
+
+⚠️ A **meta é a observada, nunca a declarada**. Meta declarada infla o variável no papel e, num
+modelo com gatilho, crava o ajuste no piso todo mês.
+
+⚠️ As elasticidades do corte de cadência (WhatsApp 3,0% · SMS 1,0% · e-mail 0,2% da recuperação
+por toque removido) são **premissa**, não medição nossa — ajuste com `--elast-wa` e afins se o
+credor tiver número próprio, e diga na planilha que é premissa.
+
 ### Leia a saída com estes olhos
 
 1. **Use a linha "pela medição", não a "premissa do modelo".** A premissa de telecom fixo por
@@ -74,7 +101,14 @@ Se o deal tem implantação ou posição humana: `--setup 60000 --setup-meses 12
    cadência, reduza régua, ou reprecifique.
 3. **Folga até a âncora de R$ 12.000** é o espaço que existe para margem, desconto e variação de
    intensidade. Folga curta significa que não cabe desconto por volume.
-4. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
+4. **Merecimento decide escopo antes de decidir preço.** A coluna **R$ por R$ 1 recuperado**
+   põe custo e recuperação na mesma linha. Faixa com recuperação zero levando fatia grande do
+   custo não é problema de preço — é pergunta ao credor sobre por que ela está no escopo (na
+   Cayena, 82% do custo em faixas que devolvem nada).
+5. **Cortar cadência por faixa é ordens de grandeza melhor que cortar por canal na base inteira.**
+   O rodapé do merecimento imprime quanto se destrói por R$ 1 economizado; acima de R$ 1 o corte
+   destrói mais do que gera.
+6. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
    o adicional de IRPJ entra na conta e a carga efetiva vai de 16,33% para até 19,53%. A planilha
    imprime a alíquota efetiva do contrato — confira se ela bate com a faixa que você esperava.
 

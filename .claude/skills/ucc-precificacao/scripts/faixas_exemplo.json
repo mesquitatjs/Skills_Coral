@@ -1,0 +1,9 @@
+[
+  {"nome": "01-30",   "cpfs": 619,  "carteira": 1703233.98,  "meta": 93.2, "aliq": 0,    "regua": 3, "wa": 5, "sms": 2, "email": 1},
+  {"nome": "31-60",   "cpfs": 127,  "carteira": 436750.17,   "meta": 19.1, "aliq": 0,    "regua": 3, "wa": 5, "sms": 2, "email": 1},
+  {"nome": "61-90",   "cpfs": 137,  "carteira": 267101.36,   "meta": 0,    "aliq": 7.5,  "regua": 3, "wa": 5, "sms": 2, "email": 1},
+  {"nome": "91-120",  "cpfs": 168,  "carteira": 1333098.51,  "meta": 0,    "aliq": 7.5,  "regua": 3, "wa": 5, "sms": 2, "email": 1},
+  {"nome": "121-180", "cpfs": 337,  "carteira": 796290.66,   "meta": 0,    "aliq": 7.5,  "regua": 3, "wa": 5, "sms": 2, "email": 1},
+  {"nome": "181-360", "cpfs": 1210, "carteira": 7000339.08,  "meta": 0,    "aliq": 15.0, "regua": 3, "wa": 5, "sms": 2, "email": 1},
+  {"nome": "360+",    "cpfs": 1603, "carteira": 11103912.02, "meta": 0,    "aliq": 20.0, "regua": 3, "wa": 5, "sms": 2, "email": 1}
+]

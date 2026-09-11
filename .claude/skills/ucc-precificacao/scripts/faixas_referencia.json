@@ -1,0 +1,7 @@
+[
+  {"nome": "1 a 30",       "cpfs": 3164, "carteira": 969097, "meta": 6.0, "aliq": 6.0,  "regua": 10, "wa": 2, "sms": 3, "email": 0.5},
+  {"nome": "31 a 60",      "cpfs": 1485, "carteira": 454656, "meta": 1.5, "aliq": 9.0,  "regua": 10, "wa": 2, "sms": 3, "email": 0.5},
+  {"nome": "61 a 90",      "cpfs": 721,  "carteira": 220803, "meta": 0.1, "aliq": 10.0, "regua": 10, "wa": 1, "sms": 2, "email": 0.5},
+  {"nome": "91 a 180",     "cpfs": 629,  "carteira": 193391, "meta": 1.3, "aliq": 17.4, "regua": 10, "wa": 1, "sms": 2, "email": 0.5},
+  {"nome": "acima de 180", "cpfs": 1,    "carteira": 232,    "meta": 0.0, "aliq": 25.0, "regua": 10, "wa": 2, "sms": 3, "email": 0.5}
+]
