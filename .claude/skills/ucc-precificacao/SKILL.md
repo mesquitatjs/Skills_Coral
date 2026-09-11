@@ -50,6 +50,22 @@ python3 scripts/ucc_calc.py --cpfs 12000 --regua 4 --wa 1 --sms 2 --email 0 \
 Opcionais: `--telefones 1.6` · `--realizacao 0.8` · `--preco 8000` ·
 `--recuperacao 117530 --fee-variavel 6.27` (liga o bloco de custo por R$ 1 recuperado).
 
+**Deriva o preço do custo em vez de fixá-lo** com `--alvo 20` (margem alvo em %). Com `--alvo 0`
+sai o equilíbrio exato. Cada carteira tem o seu preço, porque cada uma custa diferente.
+
+⛔ **Informe `--receita-base` com o que a Coral já fatura por mês.** O degrau tributário é da
+pessoa jurídica, não do contrato: se a Coral já passa de R$ 62.500/mês, o deal novo cai inteiro na
+faixa marginal e custa ~5,3% mais para entregar. Sem esse número, o contrato é avaliado sozinho e o
+preço sai barato demais.
+
+```bash
+python3 scripts/ucc_calc.py --cpfs 12000 --regua 4 --wa 1 --sms 2 \
+        --alvo 20 --receita-base 62500 --cliente "Nome" --saida planilha.md
+```
+
+Se o deal tem implantação ou posição humana: `--setup 60000 --setup-meses 12` (amortiza) e
+`--pas 1 --pa-custo 10000` (transbordo). Os dois entram como **capacidade**.
+
 ### Leia a saída com estes olhos
 
 1. **Use a linha "pela medição", não a "premissa do modelo".** A premissa de telecom fixo por
@@ -58,8 +74,9 @@ Opcionais: `--telefones 1.6` · `--realizacao 0.8` · `--preco 8000` ·
    cadência, reduza régua, ou reprecifique.
 3. **Folga até a âncora de R$ 12.000** é o espaço que existe para margem, desconto e variação de
    intensidade. Folga curta significa que não cabe desconto por volume.
-4. **Receita acima de R$ 62.500/mês** dispara aviso bloqueante: a alíquota de 16,33% não vale mais.
-   Feche com a contabilidade antes de cotar.
+4. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
+   o adicional de IRPJ entra na conta e a carga efetiva vai de 16,33% para até 19,53%. A planilha
+   imprime a alíquota efetiva do contrato — confira se ela bate com a faixa que você esperava.
 
 ### Entregue assim
 
@@ -134,9 +151,9 @@ fatura = fixo_UCC + Σ_faixa ( recuperado × alíquota × (1 + ajuste) )
 
 O script já imprime estas na planilha. Repita as relevantes na conversa:
 
-- ⛔ **Tributo acima de R$ 62.500/mês de receita** — a alíquota muda e não está modelada.
-  Deal a partir de ~8 unidades cruza a linha.
-- ⛔ **Setup, onboarding e posição humana de transbordo** não estão precificados.
+- ⚠️ **Setup, onboarding e transbordo humano entram com valor que VOCÊ informa**, não medido.
+  A referência de R$ 10.000 por posição é tabela de mercado (o que a Cayena paga à Verso), não
+  medição nossa. Zerados por default — se o deal tem implantação ou posição, informe.
 - ⛔ **Prazo, reajuste, ramp-up e churn** — sem série histórica.
 - ⛔ **Escada de desconto por volume** — existe a justificativa, não existe o degrau.
 - ⚠️ **Mensageria** vem de tabela de fornecedor, não de medição própria: a operação que medimos é
