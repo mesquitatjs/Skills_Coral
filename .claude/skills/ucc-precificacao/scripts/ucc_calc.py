@@ -188,10 +188,26 @@ def _normalizar_faixa(f):
             "carteira_meta": carteira_meta, "carteira_entrada_lacuna": lacuna}
 
 
-def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None):
+def resolver_realizacao(regua, cenario=None, override=None):
+    """Régua REALIZADA de um bloco, sob o cenário da banda.
+
+    ⛔ A realização depende da RÉGUA do bloco (93% na 2, 68% na 10), então tem de ser
+    resolvida por bloco — não achatada na régua do contrato. Uma faixa que corre régua 4
+    dentro de um contrato de régua 10 realiza 87%, não 68%.
+    O cenário `teto` é a exceção legítima: 100% é 100% em qualquer régua.
+    """
+    if override is not None:
+        return override                    # --realizacao: override plano, deliberado
+    if cenario == "teto":
+        return 1.0
+    r = realizacao_estimada(regua)
+    return r * 0.90 if cenario == "medida-10%" else r
+
+
+def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None, cenario=None):
     """Acionamento de um bloco de CPFs sob uma régua e uma cadência."""
     tent_c = regua * telefones
-    r = realizacao if realizacao is not None else realizacao_estimada(regua)
+    r = resolver_realizacao(regua, cenario, realizacao)
     tent_e = tent_c * r
     return dict(
         tent_contratada=tent_c, realizacao=r, tent_esperada=tent_e,
@@ -203,7 +219,7 @@ def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None):
 
 def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=None,
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
-             faixas=None, elast=None, ancora=None):
+             faixas=None, elast=None, ancora=None, cenario=None):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
     if faixas:
@@ -213,7 +229,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     u = ceil(cpfs / P["tam_ucc"])
     # o discador capeia POR LINHA → telefones/CPF multiplicam a tentativa efetiva
     tent_contratada = regua * telefones
-    r = realizacao if realizacao is not None else realizacao_estimada(regua)
+    r = resolver_realizacao(regua, cenario, realizacao)
     tent_esperada = tent_contratada * r
 
     setup_mes = (setup / setup_meses) if setup_meses else 0.0
@@ -222,8 +238,10 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     # ── faixas: cada uma com a sua régua e cadência; o corte é medido contra a CHEIA ──
     lf = []
     for f in (faixas or []):
-        a = _acionar(f["trabalhado"], f["regua"], telefones, f["wa"], f["sms"], f["email"])
-        cheia = _acionar(f["trabalhado"], f["regua"], telefones, wa, sms, email)
+        a = _acionar(f["trabalhado"], f["regua"], telefones, f["wa"], f["sms"], f["email"],
+                     realizacao, cenario)
+        cheia = _acionar(f["trabalhado"], f["regua"], telefones, wa, sms, email,
+                         realizacao, cenario)
         perda_frac = (max(0.0, wa - f["wa"]) * elast["wa"]
                       + max(0.0, sms - f["sms"]) * elast["sms"]
                       + max(0.0, email - f["email"]) * elast["email"])
@@ -302,7 +320,65 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     )
 
 
-def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None):
+# ── banda de cenários ─────────────────────────────────────────────────────────
+# Num contrato de VALOR FIXO o desvio de execução é risco NOSSO: cobramos o mesmo
+# todo mês e o custo varia com o que a operação realiza. A banda é o que diz quanto.
+#
+# ⛔ Três cenários NÃO são três preços. Cobra-se UM preço, e ele sai do cenário BASE;
+# os outros dois dizem que margem esse mesmo preço entrega se a realidade for outra.
+# Devolver três preços convidaria a escolher o mais confortável, que é o contrário do
+# que a banda existe para mostrar.
+CENARIOS = (
+    # (chave, rótulo, régua realizada, telefones a mais, cadência cheia)
+    ("pessimista", "Pessimista", "teto",       0.5, True),
+    ("base",       "Base",       "medida",     0.0, False),
+    ("otimista",   "Otimista",   "medida-10%", 0.0, False),
+)
+
+# o modo de cada cenário é resolvido em `resolver_realizacao`, por BLOCO — ver lá o porquê
+
+
+def banda(preco_base=None, **kw):
+    """Roda os três cenários com o MESMO preço, derivado da base.
+
+    Varia só o que a execução varia:
+      · **régua realizada** — pessimista assume o teto contratado (100%), que é o pior
+        caso de custo: toda tentativa contratada vira discagem. A base usa a realização
+        MEDIDA (93% na régua 2, 68% na 10) e o otimista tira 10% relativos dela.
+      · **telefones por CPF** — +0,5 no pessimista, porque o discador capeia por linha e
+        mailing com dois telefones dobra a tentativa efetiva sem ninguém pedir.
+      · **cadência** — cheia no pessimista: o corte por faixa é uma economia que depende
+        de a operação de fato cortar, e num mês ruim ela não corta.
+
+    O otimista é deliberadamente tímido (só a régua, 10% relativos): inflar o lado bom
+    com telefone a menos e cadência menor produziria uma banda simétrica e falsa — as
+    coisas que dão errado em execução não têm espelho do lado que dá certo.
+    """
+    faixas = kw.get("faixas")
+    tel = kw.get("telefones", 1.0)
+    def rodar(modo, dtel, cheia, preco):
+        k = dict(kw)
+        k["telefones"] = tel + dtel
+        # o CENÁRIO desce até a faixa; fixar o escalar aqui achataria a realização de
+        # uma faixa de régua própria na régua do contrato
+        k["cenario"], k["realizacao"] = modo, None
+        if cheia and faixas:
+            # cadência cheia = nenhuma faixa cortada; a régua da faixa é preservada
+            # porque ela é regra do credor, não economia nossa
+            k["faixas"] = [{**f, "wa": kw["wa"], "sms": kw["sms"], "email": kw["email"]}
+                           for f in faixas]
+        if preco is not None:
+            k["alvo"], k["preco"] = None, preco
+        return calcular(**k)
+
+    # a BASE primeiro: é dela que sai o preço que os outros dois têm de honrar
+    b = rodar("medida", 0.0, False, preco_base)
+    return [{**(b if chave == "base" else rodar(modo, dtel, cheia, b["preco"])),
+             "chave": chave, "rotulo": rot}
+            for chave, rot, modo, dtel, cheia in CENARIOS]
+
+
+def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=None):
     L = []
     A = L.append
     sec = iter(range(1, 20))
@@ -483,6 +559,40 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None):
           "a tabela de êxito do credor entraria aqui por cima — abra as faixas com `--faixas` "
           "para o cálculo sair.")
 
+    if cenarios:
+        A("")
+        S("Banda de execução")
+        A("")
+        A("O preço é **um** — o da base. Os três cenários dizem que **margem** esse mesmo preço "
+          "entrega se a operação sair do previsto. Num contrato de valor fixo o desvio de "
+          "execução é risco **nosso**.")
+        A("")
+        A("| Cenário | Régua realiza | Tent./CPF/dia | Custo | Resultado | Margem |")
+        A("|---|--:|--:|--:|--:|--:|")
+        for x in cenarios:
+            neg = "**" if x["margem_medido"] < 0 else ""
+            marca = "**" if x["chave"] == "base" else ""
+            A(f"| {marca}{x['rotulo']}{marca} | {x['realizacao']*100:.0f}% | "
+              f"{num(x['tent_esperada'], 2)} | {br(x['custo_medido'])} | "
+              f"{br(x['liquida'] - x['custo_medido'])} | "
+              f"{neg}{num(x['margem_medido']*100, 1).replace('-', '−')}%{neg} |")
+        pior = cenarios[0]
+        bom = cenarios[-1]
+        A("")
+        if pior["liquida"] - pior["custo_medido"] < 0 <= c["liquida"] - c["custo_medido"]:
+            A(f"> ⛔ **No pessimista este contrato fica negativo** "
+              f"({br(pior['liquida'] - pior['custo_medido'])}/mês). O preço fecha na execução "
+              "medida e não sobrevive à execução no teto contratado.")
+        else:
+            amp = (bom["margem_medido"] - pior["margem_medido"]) * 100
+            A(f"> A margem anda de **{num(pior['margem_medido']*100, 1)}%** a "
+              f"**{num(bom['margem_medido']*100, 1)}%** — **{num(amp, 1)} p.p.** de amplitude.")
+        A("")
+        A("O **pessimista** assume a régua realizada no teto contratado, **+0,5 telefone por "
+          "CPF** (o discador capeia por linha) e a cadência cheia, sem o corte por faixa. O "
+          "**otimista** mexe só na régua, 10% abaixo da medida — o que dá errado em execução "
+          "não tem espelho do lado que dá certo, e uma banda simétrica seria uma banda falsa.")
+
     A("")
     S("Leitura contra as âncoras")
     A("")
@@ -567,6 +677,8 @@ def main():
     ap.add_argument("--pas", type=float, default=0, help="posições humanas de transbordo")
     ap.add_argument("--pa-custo", type=float, default=None,
                     help=f"custo por posição (default {P['pa_humana']:.0f})")
+    ap.add_argument("--banda", action="store_true",
+                    help="acrescenta a banda de execução (pessimista/base/otimista)")
     ap.add_argument("--ancora", type=float, default=None,
                     help="o que o credor paga HOJE por unidade equivalente; sem isso, "
                          f"a âncora genérica de R$ {P['ancora']:.0f}")
@@ -591,7 +703,17 @@ def main():
                  receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
                  pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                  elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100))
-    md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente)
+    cen = None
+    if a.banda:
+        cen = banda(preco_base=(a.preco if a.alvo is None else None),
+                    cpfs=a.cpfs, regua=a.regua, wa=a.wa, sms=a.sms, email=a.email,
+                    telefones=a.telefones,
+                    alvo=(a.alvo / 100 if a.alvo is not None else None),
+                    receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
+                    pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
+                    elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
+                               email=a.elast_email / 100))
+    md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen)
     if a.saida:
         open(a.saida, "w", encoding="utf-8").write(md + "\n")
         print(f"planilha escrita em {a.saida}")
