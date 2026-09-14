@@ -476,6 +476,70 @@ def sensibilidade_regua(reguas=None, voz=None, **kw):
     return linhas
 
 
+def veredito_regua(voz=None, reguas=None, **kw):
+    """Direção, contrapartida e LIMITE da régua — o que a escada conclui, calculado.
+
+    ⛔ **Não existe ponto ótimo interior.** Sob gamma = 1 (o medido) a razão
+    `Δrecuperação ÷ Δcusto` é CONSTANTE ao longo da escada — conferido: 598,65 nos quatro
+    degraus da carteira de exemplo. Função monótona não tem máximo no meio: o ótimo é
+    sempre um CANTO, e qual canto sai de uma comparação só. Pedir para a pessoa deslizar a
+    régua procurando o ponto de virada é pedir para procurar o que não está lá.
+
+    Três coisas criariam um ótimo interior, e nenhuma está medida:
+      · gamma < 1 forte o bastante para a razão cruzar o ponto de equilíbrio DENTRO da faixa
+        (a 0,8 e a 0,5 ela cai, mas segue ordens de grandeza acima de 1 nesta carteira);
+      · custo de CANAL em degraus — mais régua pede mais canal, e o de-para bot ↔ canal não
+        existe (§6.3 do modelo);
+      · dano por sobre-discagem (reclamação, opt-out, reputação do número) — fora do modelo.
+
+    Então o que se calcula não é o ótimo: é a DIREÇÃO e o que a TRAVA. O limite sai por
+    bisseção sobre a régua — no modo com alvo, a maior régua cujo preço ainda cabe na
+    âncora; com preço fixado, a maior régua que ainda não põe o contrato no negativo.
+    """
+    deg = sensibilidade_regua(voz=voz, reguas=reguas, **kw)
+    if not deg:
+        return None
+    base = next((l for l in deg if l["base"]), deg[0])
+    passo = next((l for l in deg if l["regua"] > base["regua"]), None)
+    tem_rec = any(l["recuperado"] > 0 for l in deg)
+    alvo = kw.get("alvo")
+    ancora = kw.get("ancora") or P["ancora"]
+
+    def cabe(rg):
+        l = sensibilidade_regua(reguas=[rg], voz=voz, **kw)[0]
+        return (l["preco_alvo"] <= ancora) if alvo is not None else (l["resultado"] >= 0)
+
+    lo, hi = 0.5, 20.0
+    if not cabe(lo):
+        limite = None                 # nem a régua mínima cabe: o problema não é a discagem
+    elif cabe(hi):
+        limite = hi                   # não morde dentro do alcance que faz sentido
+    else:
+        for _ in range(20):
+            meio = (lo + hi) / 2
+            if cabe(meio):
+                lo = meio
+            else:
+                hi = meio
+        limite = int(lo * 10) / 10    # trunca: arredondar para cima devolveria régua que NÃO cabe
+
+    return dict(
+        regua=base["regua"], tem_recuperacao=tem_rec,
+        por_real_credor=(passo["por_real"] if passo and tem_rec else None),
+        # R$ que a CORAL ganha por R$ 1 a mais de discagem: negativo = custo puro nosso
+        por_real_coral=(passo["d_resultado_var"] / passo["d_custo"]
+                        if passo and abs(passo["d_custo"]) > 1e-9 else None),
+        d_custo=(passo["d_custo"] if passo else None),
+        d_recuperado=(passo["d_recuperado"] if passo else None),
+        d_resultado_coral=(passo["d_resultado_var"] if passo else None),
+        direcao_credor=("mais" if tem_rec else "indiferente"),
+        direcao_coral=("mais" if passo and passo["d_resultado_var"] > 0 else "menos"),
+        limite_tipo=("ancora" if alvo is not None else "equilibrio"),
+        limite_regua=limite, limite_valor=(ancora if alvo is not None else 0.0),
+        sem_otimo_interior=True,
+    )
+
+
 # ── banda de cenários ─────────────────────────────────────────────────────────
 # Num contrato de VALOR FIXO o desvio de execução é risco NOSSO: cobramos o mesmo
 # todo mês e o custo varia com o que a operação realiza. A banda é o que diz quanto.
