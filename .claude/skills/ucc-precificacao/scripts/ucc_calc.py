@@ -44,6 +44,9 @@ P = {
     "presumido":      0.32,     # TABELA — presunção de lucro, serviços
     "teto_presumido": 20_000.0, # TABELA — lucro presumido/mês a partir do qual o adicional incide
     "ancora":         12_000.0, # DECIDIDO — posição humana + plataforma
+    # teto do que o credor paga por R$ 1 recuperado. Estava só no simulador da tela até
+    # 14/09; o dossiê já o documentava, então isto é a calculadora alcançando o doc.
+    "teto_por_real":  0.30,     # DECIDIDO
     "pa_humana":      10_000.0, # TABELA de mercado — posição humana de transbordo
     "banda_gatilho":  0.15,
 }
@@ -315,6 +318,8 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         rateio_frac=max(P["rateio_piso"], cpfs * P["rateio_por_cpf"]),
         # o que o credor paga HOJE é a âncora que vale; sem isso, a genérica
         ancora=(ancora if ancora else P["ancora"]), ancora_propria=bool(ancora),
+        **_restricao(preco, u, (ancora if ancora else P["ancora"]),
+                     sum(l["recuperado"] for l in lf)),
         tent_contratada=tent_contratada, tent_esperada=tent_esperada, realizacao=r,
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
@@ -376,6 +381,29 @@ def banda(preco_base=None, **kw):
     return [{**(b if chave == "base" else rodar(modo, dtel, cheia, b["preco"])),
              "chave": chave, "rotulo": rot}
             for chave, rot, modo, dtel, cheia in CENARIOS]
+
+
+def _restricao(preco, u, ancora, recuperado):
+    """Qual das três restrições está MORDENDO — e por quanto.
+
+    As três não são do mesmo tipo, e confundi-las é o erro comum:
+      · a **margem alvo** empurra o preço PARA CIMA (é o mínimo que a conta pede);
+      · a **âncora** e o **teto por R$ 1 recuperado** são TETOS.
+    Logo a restrição ativa é o teto mais baixo que o preço do alvo já ultrapassou. Se o
+    preço cabe nos dois tetos, quem manda é a própria margem alvo — e aí há folga para
+    desconto, que é exatamente a leitura que o comercial precisa antes de negociar.
+
+    O teto por R$ 1 só existe com recuperação informada; sem ela devolve `None` em vez
+    de zero, porque "não sabemos" e "não fura" são coisas diferentes.
+    """
+    teto_r = (P["teto_por_real"] * recuperado / u) if (recuperado > 0 and u) else None
+    tetos = [("ancora", ancora)] + ([("teto_por_real", teto_r)] if teto_r else [])
+    furados = [(k, v) for k, v in tetos if preco > v]
+    if furados:
+        k, v = min(furados, key=lambda x: x[1])
+        return dict(restricao=k, restricao_teto=v, restricao_folga=v - preco)
+    menor = min(v for _, v in tetos)
+    return dict(restricao="margem_alvo", restricao_teto=menor, restricao_folga=menor - preco)
 
 
 def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=None):
