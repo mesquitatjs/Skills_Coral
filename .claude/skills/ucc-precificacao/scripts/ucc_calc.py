@@ -67,6 +67,10 @@ def realizacao_estimada(regua):
     return REALIZACAO[lo] + t * (REALIZACAO[hi] - REALIZACAO[lo])
 
 
+# item 7 do discovery — como a carteira é repartida entre assessorias
+COMPART_MODELOS = ("exclusivo", "aberto", "rotativo")
+
+
 # elasticidade de canal: fração da recuperação perdida ao tirar UM toque da base inteira.
 # ⚠️ PREMISSA, não medição nossa — a operação que medimos é predominantemente de voz.
 ELAST = {"wa": 0.03, "sms": 0.01, "email": 0.002}
@@ -101,6 +105,10 @@ def carregar_faixas(caminho, padrao):
                                  if f.get("carteira_entrada") is not None else None),
             "meta": float(f.get("meta", 0)) / 100, "aliq": float(f.get("aliq", 0)) / 100,
             "base_meta": str(f.get("base_meta", "trabalhado")).strip().lower(),
+            # item 13 do discovery: desconto máximo no principal aceito na faixa
+            "desconto": float(f.get("desconto", 0) or 0) / 100,
+            # sobre QUAL valor a taxa de recuperação do item 8 foi medida
+            "meta_base_valor": str(f.get("meta_base_valor", "liquida")).strip().lower(),
             "regua": float(f.get("regua", padrao["regua"])),
             "wa": float(f.get("wa", padrao["wa"])), "sms": float(f.get("sms", padrao["sms"])),
             "email": float(f.get("email", padrao["email"])),
@@ -191,9 +199,23 @@ def _normalizar_faixa(f):
         raise SystemExit(f"⛔ faixa {f.get('nome','sem nome')}: base_meta inválida ({base!r}). "
                          "Use estoque | entrada | trabalhado.")
     carteira_meta = {"estoque": cart, "entrada": ce, "trabalhado": cart + ce}[base]
+    # ⛔ A taxa do credor pode já vir LÍQUIDA (R$ recebido ÷ carteira, desconto dentro) ou de
+    # FACE (valor negociado, antes do abatimento). Aplicar (1 − desconto) sobre uma taxa já
+    # líquida desconta DUAS vezes; não aplicar sobre uma de face superestima pelo tamanho do
+    # desconto. Numa faixa de 40% isso é 40% de erro nos dois sentidos — por isso a faixa
+    # DECLARA, do mesmo jeito que `base_meta` declara o denominador.
+    val = str(f.get("meta_base_valor", "liquida")).strip().lower()
+    if val not in ("liquida", "face"):
+        raise SystemExit(f"⛔ faixa {f.get('nome','sem nome')}: meta_base_valor inválida "
+                         f"({val!r}). Use liquida | face.")
+    desc = float(f.get("desconto", 0) or 0)
+    if not 0 <= desc < 1:
+        raise SystemExit(f"⛔ faixa {f.get('nome','sem nome')}: desconto fora de 0-100% ({desc}).")
     return {**f, "entrada_mes": ent, "carteira_entrada": ce, "base_meta": base,
             "trabalhado": cpfs + ent, "carteira_trab": cart + ce,
-            "carteira_meta": carteira_meta, "carteira_entrada_lacuna": lacuna}
+            "carteira_meta": carteira_meta, "carteira_entrada_lacuna": lacuna,
+            "desconto": desc, "meta_base_valor": val,
+            "fator_desconto": (1 - desc) if val == "face" else 1.0}
 
 
 def resolver_realizacao(regua, cenario=None, override=None):
@@ -233,11 +255,11 @@ def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None, cenario=No
 # uma planilha sem ficha.
 FICHA_CHAVES = ("cpfs", "faixas", "entrada_mes", "base_meta", "carteira_entrada",
                 "regua", "telefones", "cadencia", "carteira_faixa", "meta", "aliq",
-                "ancora", "transbordo")
+                "ancora", "transbordo", "compartilhamento", "desconto")
 
 
 def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbordo,
-           entrada_sem_valor):
+           entrada_sem_valor, compart_modelo="exclusivo", captura=1.0):
     aging = bool(lf)
     ent = sum(l["entrada_mes"] for l in lf)
     na = lambda cond, v: v if cond else "na"
@@ -258,14 +280,30 @@ def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbord
         "aliq": na(aging, "ok" if any(l["aliq"] > 0 for l in lf) else "falta"),
         "ancora": "ok" if ancora_propria else "assumido",
         "transbordo": "ok" if transbordo > 0 else "assumido",
+        # declarar "aberto"/"rotativo" e deixar a captura em 100% é premissa otimista:
+        # o custo é integral e a recuperação seria toda nossa
+        "compartilhamento": ("assumido" if compart_modelo == "exclusivo"
+                             else "falta" if captura >= 1 else "ok"),
+        # a política de desconto é do credor; sem ela a proposta escreve uma premissa a menos
+        "desconto": na(aging, "ok" if any(l["desconto"] > 0 for l in lf) else "assumido"),
     }
 
 
 def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=None,
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
-             faixas=None, elast=None, ancora=None, cenario=None):
+             faixas=None, elast=None, ancora=None, cenario=None,
+             compart_modelo="exclusivo", captura=1.0):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
+    # item 7 do discovery. Em mar aberto discamos a base INTEIRA (custo integral) e a
+    # recuperação é disputada — só a nossa variável encolhe.
+    compart_modelo = str(compart_modelo or "exclusivo").strip().lower()
+    if compart_modelo not in COMPART_MODELOS:
+        raise SystemExit(f"⛔ compart_modelo inválido ({compart_modelo!r}). "
+                         f"Use {' | '.join(COMPART_MODELOS)}.")
+    captura = 1.0 if compart_modelo == "exclusivo" else float(captura)
+    if not 0 < captura <= 1:
+        raise SystemExit(f"⛔ captura fora de 0-100% ({captura}).")
     if faixas:
         faixas = [_normalizar_faixa(f) for f in faixas]
         # o TRABALHADO (estoque + entrada do mês) é a verdade da carteira, não a foto
@@ -289,7 +327,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         perda_frac = (max(0.0, wa - f["wa"]) * elast["wa"]
                       + max(0.0, sms - f["sms"]) * elast["sms"]
                       + max(0.0, email - f["email"]) * elast["email"])
-        rec_base = f["carteira_meta"] * f["meta"]
+        rec_base = f["carteira_meta"] * f["meta"] * f["fator_desconto"]
         acion = a["telecom"] + a["msg"] + a["crm"]
         lf.append(dict(
             **f, **{k: a[k] for k in ("telecom", "msg", "crm", "tent_esperada")},
@@ -327,7 +365,9 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         l["capacidade"] = capacidade * l["trabalhado"] / cpfs if cpfs else 0.0
         l["custo"] = l["capacidade"] + l["acionamento"]
         l["por_real"] = (l["custo"] / l["recuperado"]) if l["recuperado"] > 0 else None
-        l["variavel"] = l["recuperado"] * l["aliq"]
+        # o custo é INTEGRAL (discamos a base toda); só a recuperação é disputada
+        l["recuperado_coral"] = l["recuperado"] * captura
+        l["variavel"] = l["recuperado_coral"] * l["aliq"]
 
     if alvo is None:
         preco = preco or P["preco_ucc"]
@@ -345,6 +385,8 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         estoque=sum(l["cpfs"] for l in lf), entrada_mes=sum(l["entrada_mes"] for l in lf),
         entrada_sem_valor=[l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
         recuperado=sum(l["recuperado"] for l in lf),
+        recuperado_coral=sum(l["recuperado_coral"] for l in lf),
+        compart_modelo=compart_modelo, captura=captura,
         rec_base_total=sum(l["rec_base"] for l in lf),
         perda_total=sum(l["perda"] for l in lf),
         economia_total=sum(l["economia"] for l in lf),
@@ -365,7 +407,8 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         tel=telefones, cad=dict(wa=wa, sms=sms, email=email), regua=regua,
         ficha=_ficha(cpfs, regua, telefones, wa, sms, email, lf,
                      bool(ancora), transbordo,
-                     [l["nome"] for l in lf if l.get("carteira_entrada_lacuna")]),
+                     [l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
+                     compart_modelo, captura),
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
 
@@ -421,6 +464,8 @@ def sensibilidade_regua(reguas=None, voz=None, **kw):
     """
     voz = {**VOZ, **(voz or {})}
     piso, gamma = float(voz["piso"]), float(voz["gamma"])
+    captura = (1.0 if str(kw.get("compart_modelo") or "exclusivo").strip().lower() == "exclusivo"
+               else float(kw.get("captura", 1.0)))
     regua_base = float(kw.get("regua") or 0)
     if regua_base <= 0:
         return []
@@ -443,7 +488,7 @@ def sensibilidade_regua(reguas=None, voz=None, **kw):
             mult = (l["tent_esperada"] / t0) if t0 else 1.0
             r = l0["recuperado"] * (piso + (1 - piso) * mult ** gamma)
             rec += r
-            var += r * l["aliq"]
+            var += r * captura * l["aliq"]
         receita = u * preco_base
         liq = receita - tributo_de(receita, rb)
         liq_var = (receita + var) - tributo_de(receita + var, rb)
@@ -641,6 +686,10 @@ FICHA_LINHAS = (
     ("aliq", "Tabela de comissionamento", "sem isto o híbrido com gatilho não existe"),
     ("ancora", "O que o credor paga hoje", "é a âncora competitiva real"),
     ("transbordo", "Transbordo humano", "havendo fila humana, o custo por posição entra aqui"),
+    ("compartilhamento", "Modelo de compartilhamento",
+     "em mar aberto o custo é integral e a recuperação é disputada"),
+    ("desconto", "Desconto no principal por faixa",
+     "a alíquota incide sobre o negociado, não sobre a face"),
 )
 
 
@@ -846,6 +895,33 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "CPF** (o discador capeia por linha) e a cadência cheia, sem o corte por faixa. O "
           "**otimista** mexe só na régua, 10% abaixo da medida — o que dá errado em execução "
           "não tem espelho do lado que dá certo, e uma banda simétrica seria uma banda falsa.")
+
+    if c.get("compart_modelo", "exclusivo") != "exclusivo" or any(
+            l["desconto"] > 0 for l in c["faixas"]):
+        A("")
+        S("Compartilhamento e desconto")
+        A("")
+        A("| Item | Valor | Efeito na conta |")
+        A("|---|--:|---|")
+        A(f"| Modelo de compartilhamento | {c.get('compart_modelo', 'exclusivo')} "
+          "| discamos a base inteira; o custo **não** se divide |")
+        A(f"| Recuperação que fica com a Coral | {pct(c.get('captura', 1.0), 0).lstrip('+')} "
+          f"| base da nossa variável |")
+        A(f"| Recuperação da faixa (total do credor) | {br(c['recuperado'])} "
+          "| merecimento e teto de R$ 0,30 leem esta |")
+        A(f"| **Recuperação capturada pela Coral** | **{br(c['recuperado_coral'])}** "
+          "| **a alíquota incide sobre esta** |")
+        for l in c["faixas"]:
+            if l["desconto"] > 0:
+                base_rot = ("de FACE — a conta abate o desconto" if l["meta_base_valor"] == "face"
+                            else "já LÍQUIDA — o desconto não abate de novo")
+                A(f"| Desconto em {l['nome']} | {pct(l['desconto'], 0).lstrip('+')} "
+                  f"| meta {base_rot} |")
+        if c.get("compart_modelo", "exclusivo") != "exclusivo" and c.get("captura", 1.0) >= 1:
+            A("")
+            A("> ⛔ **Carteira declarada não-exclusiva com captura em 100%.** O custo já é "
+              "integral; assumir que toda a recuperação vira fatura nossa é a premissa mais "
+              "otimista possível. Informe a fração que esperamos capturar.")
 
     if escada:
         A("")
@@ -1459,6 +1535,11 @@ def main():
                     help="omite a banda de execução (ela entra por default)")
     # mesma lógica da banda: discar mais ou menos é decisão recorrente, e esconder a
     # escada atrás de uma flag faz a régua voltar a parecer só despesa
+    ap.add_argument("--compart-modelo", default="exclusivo",
+                    choices=list(COMPART_MODELOS),
+                    help="como a carteira é repartida entre assessorias (default %(default)s)")
+    ap.add_argument("--captura", type=float, default=100.0,
+                    help="%% da recuperação que esperamos capturar; só vale fora do exclusivo")
     ap.add_argument("--sem-escada", action="store_true",
                     help="omite a escada de régua (ela entra por default)")
     ap.add_argument("--voz-piso", type=float, default=VOZ["piso"] * 100,
@@ -1497,6 +1578,7 @@ def main():
                  alvo=(a.alvo / 100 if a.alvo is not None else None),
                  receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
                  pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
+                 compart_modelo=a.compart_modelo, captura=a.captura / 100,
                  elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100))
     cen = None
     if not a.sem_banda:
@@ -1506,6 +1588,7 @@ def main():
                     alvo=(a.alvo / 100 if a.alvo is not None else None),
                     receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
                     pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
+                    compart_modelo=a.compart_modelo, captura=a.captura / 100,
                     elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
                                email=a.elast_email / 100))
     esc = None
@@ -1516,6 +1599,7 @@ def main():
             alvo=(a.alvo / 100 if a.alvo is not None else None),
             receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
             pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
+            compart_modelo=a.compart_modelo, captura=a.captura / 100,
             elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100),
             voz=dict(piso=a.voz_piso / 100, gamma=a.voz_gamma))
 

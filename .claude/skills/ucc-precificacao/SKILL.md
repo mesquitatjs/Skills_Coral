@@ -51,6 +51,9 @@ Opcionais: `--telefones 1.6` · `--realizacao 0.8` · `--preco 8000` ·
 `--recuperacao 117530 --fee-variavel 6.27` (liga o bloco de custo por R$ 1 recuperado) ·
 `--sem-banda` (a banda de execução entra por default) · `--sem-escada` (a escada de régua também
 entra por default) · `--voz-piso 44.4 --voz-gamma 1.0` (as duas premissas da resposta à discagem).
+· `--compart-modelo aberto --captura 34` (carteira disputada: o custo é integral, a recuperação é
+fração). O **desconto no principal** entra por faixa no JSON (`desconto` em % e `meta_base_valor`
+= `liquida` | `face`).
 
 **Deriva o preço do custo em vez de fixá-lo** com `--alvo 20` (margem alvo em %). Com `--alvo 0`
 sai o equilíbrio exato. Cada carteira tem o seu preço, porque cada uma custa diferente.
@@ -120,14 +123,24 @@ credor tiver número próprio, e diga na planilha que é premissa.
 7. **Cortar cadência por faixa é ordens de grandeza melhor que cortar por canal na base inteira.**
    O rodapé do merecimento imprime quanto se destrói por R$ 1 economizado; acima de R$ 1 o corte
    destrói mais do que gera.
-8. **Discar mais e discar menos têm dono diferente.** A escada de régua move as duas pontas —
+8. **Carteira compartilhada não divide o custo.** Em mar aberto discamos a base inteira e a
+   recuperação é disputada: só a parte que fechamos vira a nossa variável. Tratar mar aberto como
+   exclusiva superestima o híbrido na proporção dos concorrentes, com o custo igual. A captura é
+   **entrada**, não conta — a partição igual entre assessorias nunca foi medida, e a ficha marca
+   como lacuna quem declara aberto e deixa 100%.
+9. **Desconto no principal só abate se a taxa for de face.** A taxa que o credor informa pode já
+   ser líquida (R$ recebido ÷ carteira) ou de face. Abater de uma taxa já líquida desconta duas
+   vezes; não abater de uma taxa de face superestima pelo tamanho do desconto — numa faixa de 40%,
+   40% de erro nos dois sentidos. Por isso cada faixa declara `meta_base_valor`, como já declara o
+   denominador.
+10. **Discar mais e discar menos têm dono diferente.** A escada de régua move as duas pontas —
    custo e recuperação — e imprime o Δ para o credor e o Δ para a Coral no mesmo degrau. Com o
    variável inativo ou cadastrado só em faixas que recuperam zero, subir a régua é ganho inteiro
    do credor e custo inteiro nosso; é o conflito de incentivo do corte de cadência, com o sinal
    trocado. ⚠️ A resposta da recuperação à discagem é **transplantada** da nossa operação de voz
    (piso espontâneo 44,4%, retorno proporcional até 10 tentativas) para a recuperação observada na
    operação do credor — é a premissa de maior alavanca da seção, e vai escrita.
-9. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
+11. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
    o adicional de IRPJ entra na conta e a carga efetiva vai de 16,33% para até 19,53%. A planilha
    imprime a alíquota efetiva do contrato — confira se ela bate com a faixa que você esperava.
 
