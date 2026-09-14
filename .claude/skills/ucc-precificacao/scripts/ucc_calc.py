@@ -368,6 +368,112 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     )
 
 
+# ── voz: o que a tentativa a mais faz com a recuperação ──────────────────────
+# O corte de CADÊNCIA (WhatsApp/SMS/e-mail) já tinha elasticidade; a RÉGUA não tinha
+# nenhuma, então discar mais só aparecia como despesa e discar menos só como economia.
+# Duas premissas, as duas com procedência declarada:
+#
+#   piso  — fração da recuperação que acontece SEM discagem nenhuma. MEDIDO em jul/2026
+#           na operação de Receita Garantida: dos R$ 17,15M recuperados, 44,4% foram
+#           espontâneos e 99,4% deles sem nenhum toque nosso. Sem esse piso a conta
+#           afirma que régua zero recupera zero, que é falso por quase metade.
+#   gamma — retorno da tentativa a mais. 1,0 = a parte acionada acompanha a tentativa
+#           EFETIVA na proporção. MEDIDO no Ouro: o R$/acordo da faixa cortada é plano
+#           de 1 a 10 tentativas (79,17 cortando após a 1ª × 79,09 cortando só a 10ª),
+#           e o ROI por faixa cortada replicou o mesmo achado por outra medida.
+#           gamma < 1 é o que cria ponto de virada; medimos que não há, até 10.
+#
+# ⚠️ O retorno decrescente que ESTE modelo tem vem da REALIZAÇÃO (93% na régua 2, 68%
+# na 10): subir a régua contratada compra cada vez menos tentativa efetiva. Por tentativa
+# efetiva, custo e recuperação andam no mesmo passo — que é o que foi medido.
+# ⛔ LACUNA: régua maior exige mais CANAIS, e o de-para bot ↔ canal não existe. A escada
+# cobra o telecom da tentativa a mais e NÃO cobra capacidade adicional.
+VOZ = {"piso": 0.444, "gamma": 1.0}
+
+
+def escada_regua(base, passos=2, minimo=0.5):
+    """Réguas vizinhas à cadastrada — 'e se eu discar uma a mais, uma a menos'."""
+    base = float(base)
+    if base <= 0:
+        return []
+    vals = [round(base + d, 2) for d in range(-passos, passos + 1)]
+    vals = [v for v in vals if v >= minimo]
+    d = passos + 1
+    while len(vals) < 2 * passos + 1:          # base baixa sobe a escada em vez de
+        vals.append(round(base + d, 2))        # inventar régua negativa
+        d += 1
+    return sorted(set(vals))
+
+
+def sensibilidade_regua(reguas=None, voz=None, **kw):
+    """Escada de régua: quanto custa e quanto recupera discar mais ou menos.
+
+    Roda com o PREÇO DA BASE em todas as linhas. A pergunta é gastar mais dentro de um
+    preço já acordado, não recotar a cada tentativa — devolver um preço por degrau
+    convidaria a escolher o degrau confortável, o mesmo motivo pelo qual a banda cobra um
+    preço só. A coluna `preco_alvo` fica ao lado para quem ainda está cotando.
+
+    Faixa que corre a régua do contrato ACOMPANHA a escada; faixa deliberadamente cortada
+    fica onde está — a escada pergunta pela régua do contrato, não desfaz a decisão de
+    cortar uma faixa.
+    """
+    voz = {**VOZ, **(voz or {})}
+    piso, gamma = float(voz["piso"]), float(voz["gamma"])
+    regua_base = float(kw.get("regua") or 0)
+    if regua_base <= 0:
+        return []
+    base = calcular(**kw)
+    preco_base, u = base["preco"], base["uccs"]
+    alvo, rb = kw.get("alvo"), kw.get("receita_base", 0.0)
+    if reguas is None:
+        reguas = escada_regua(regua_base)
+
+    def rodar(rg):
+        k2 = dict(kw, regua=rg, preco=preco_base, alvo=None)
+        if k2.get("faixas"):
+            k2["faixas"] = [dict(f, regua=(rg if abs(float(f["regua"]) - regua_base) < 1e-9
+                                           else f["regua"]))
+                            for f in kw["faixas"]]
+        c = calcular(**k2)
+        rec = var = 0.0
+        for l0, l in zip(base["faixas"], c["faixas"]):
+            t0 = l0["tent_esperada"]
+            mult = (l["tent_esperada"] / t0) if t0 else 1.0
+            r = l0["recuperado"] * (piso + (1 - piso) * mult ** gamma)
+            rec += r
+            var += r * l["aliq"]
+        receita = u * preco_base
+        liq = receita - tributo_de(receita, rb)
+        liq_var = (receita + var) - tributo_de(receita + var, rb)
+        return dict(
+            regua=rg, realizacao=c["realizacao"], tent_esperada=c["tent_esperada"],
+            custo=c["custo_medido"], telecom=c["tel_med"],
+            recuperado=rec, variavel=var,
+            resultado=liq - c["custo_medido"],
+            resultado_var=liq_var - c["custo_medido"],
+            preco_alvo=(preco_do_alvo(c["custo_medido"], u, alvo, rb)
+                        if alvo is not None else None),
+        )
+
+    ref = rodar(regua_base)
+    carteira = base["carteira"]
+    linhas = []
+    for rg in reguas:
+        l = rodar(rg)
+        l["base"] = abs(rg - regua_base) < 1e-9
+        l["d_custo"] = l["custo"] - ref["custo"]
+        l["d_recuperado"] = l["recuperado"] - ref["recuperado"]
+        l["d_resultado_var"] = l["resultado_var"] - ref["resultado_var"]
+        # R$ que o credor recupera a mais por R$ 1 a mais de discagem. Sob gamma = 1 é
+        # constante ao longo da escada — é o achado, não um arredondamento.
+        l["por_real"] = (l["d_recuperado"] / l["d_custo"]) if abs(l["d_custo"]) > 1e-9 else None
+        # extrapolar longe da base produz recuperação maior que a carteira — a escada diz
+        # quando saiu do plausível em vez de imprimir o número com cara de resultado
+        l["acima_da_carteira"] = bool(carteira > 0 and l["recuperado"] > carteira)
+        linhas.append(l)
+    return linhas
+
+
 # ── banda de cenários ─────────────────────────────────────────────────────────
 # Num contrato de VALOR FIXO o desvio de execução é risco NOSSO: cobramos o mesmo
 # todo mês e o custo varia com o que a operação realiza. A banda é o que diz quanto.
@@ -472,7 +578,8 @@ FICHA_LINHAS = (
 )
 
 
-def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=None):
+def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=None,
+             escada=None):
     L = []
     A = L.append
     sec = iter(range(1, 20))
@@ -686,6 +793,55 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "CPF** (o discador capeia por linha) e a cadência cheia, sem o corte por faixa. O "
           "**otimista** mexe só na régua, 10% abaixo da medida — o que dá errado em execução "
           "não tem espelho do lado que dá certo, e uma banda simétrica seria uma banda falsa.")
+
+    if escada:
+        A("")
+        S("Discar mais ou menos")
+        A("")
+        A("A régua mexia só no custo. Aqui as duas pontas andam juntas: quanto custa a tentativa "
+          "a mais e quanto ela devolve — **ao credor** e **à Coral**, que raramente é a mesma "
+          "resposta. Todas as linhas rodam com o **preço da base**; `Preço no alvo` fica ao lado "
+          "para quem ainda está cotando.")
+        A("")
+        A("| Régua/dia | Tent. efetiva | Custo | Recuperação | Δ recup. | Nossa variável "
+          "| Result. Coral | Δ result. | Preço no alvo |")
+        A("|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+        tem_rec = any(l["recuperado"] > 0 for l in escada)
+        for l in escada:
+            m = "**" if l["base"] else ""
+            sinal = lambda v: ("+" if v > 0 else "") + br(v).replace("-", "−")
+            A(f"| {m}{num(l['regua'], 0 if float(l['regua']).is_integer() else 1)}{m} "
+              f"| {num(l['tent_esperada'], 2)} | {br(l['custo'])} "
+              f"| {br(l['recuperado']) if tem_rec else '—'} "
+              f"| {'—' if l['base'] or not tem_rec else sinal(l['d_recuperado'])} "
+              f"| {br(l['variavel']) if tem_rec else '—'} | {br(l['resultado_var'])} "
+              f"| {'—' if l['base'] else sinal(l['d_resultado_var'])} "
+              f"| {br(l['preco_alvo']) if l['preco_alvo'] is not None else '—'} |")
+        base_l = next((l for l in escada if l["base"]), escada[0])
+        acima = [l for l in escada if l["regua"] > base_l["regua"]]
+        A("")
+        if acima and tem_rec:
+            pa = acima[0]
+            A(f"> Subir a régua de **{num(base_l['regua'], 0)}** para **{num(pa['regua'], 0)}** "
+              f"custa **{br(pa['d_custo'])}/mês** e devolve **{br(pa['d_recuperado'])}** de "
+              f"recuperação ao credor — **R$ {num(pa['por_real'], 2)}** por R$ 1 gasto. "
+              + (f"Para a Coral sobra **{br(pa['d_resultado_var'])}/mês**."
+                 if pa["d_resultado_var"] >= 0 else
+                 f"Para a Coral **custa {br(-pa['d_resultado_var'])}/mês** — o credor quer "
+                 "discar mais e nós não."))
+        elif acima:
+            A(f"> Sem a carteira aberta por faixa só o **custo** é calculável: uma régua a mais "
+              f"custa **{br(acima[0]['d_custo'])}/mês**.")
+        if any(l["acima_da_carteira"] for l in escada):
+            A("")
+            A("> ⛔ Algum degrau projeta recuperação **maior que a carteira inteira**. "
+              "Extrapolação longe da régua cadastrada não se sustenta — descarte os extremos.")
+        A("")
+        A(f"Piso espontâneo **{num(VOZ['piso']*100, 1)}%** (MEDIDO — jul/2026, Receita "
+          f"Garantida) e retorno por tentativa **{num(VOZ['gamma'], 2)}** (1,00 = proporcional, o medido no Ouro "
+          "de 1 a 10 tentativas). ⚠️ A recuperação de cada faixa foi observada na operação atual "
+          "do credor, que não é a nossa. ⛔ A escada cobra o telecom do degrau e **não** cobra "
+          "capacidade adicional — o de-para bot ↔ canal não existe.")
 
     A("")
     S("Ficha de entrada")
@@ -1248,6 +1404,14 @@ def main():
     # nosso, e um resultado em ponto esconde justamente o que a banda existe para mostrar
     ap.add_argument("--sem-banda", action="store_true",
                     help="omite a banda de execução (ela entra por default)")
+    # mesma lógica da banda: discar mais ou menos é decisão recorrente, e esconder a
+    # escada atrás de uma flag faz a régua voltar a parecer só despesa
+    ap.add_argument("--sem-escada", action="store_true",
+                    help="omite a escada de régua (ela entra por default)")
+    ap.add_argument("--voz-piso", type=float, default=VOZ["piso"] * 100,
+                    help="%% da recuperação que acontece SEM discagem (default %(default).1f)")
+    ap.add_argument("--voz-gamma", type=float, default=VOZ["gamma"],
+                    help="retorno por tentativa; 1,0 = proporcional (default %(default).2f)")
     ap.add_argument("--ancora", type=float, default=None,
                     help="o que o credor paga HOJE por unidade equivalente; sem isso, "
                          f"a âncora genérica de R$ {P['ancora']:.0f}")
@@ -1291,6 +1455,17 @@ def main():
                     pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                     elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
                                email=a.elast_email / 100))
+    esc = None
+    if not a.sem_escada:
+        esc = sensibilidade_regua(
+            cpfs=a.cpfs, regua=a.regua, wa=a.wa, sms=a.sms, email=a.email,
+            telefones=a.telefones, realizacao=a.realizacao, preco=a.preco,
+            alvo=(a.alvo / 100 if a.alvo is not None else None),
+            receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
+            pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
+            elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100),
+            voz=dict(piso=a.voz_piso / 100, gamma=a.voz_gamma))
+
     if a.registrar:
         from datetime import date
         d = pathlib.Path(a.cotacoes_dir)
@@ -1305,7 +1480,7 @@ def main():
         md = proposta(c, cliente=a.cliente, modalidade=a.modalidade, validade=a.validade)
         rotulo = "proposta"
     else:
-        md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen)
+        md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen, escada=esc)
         rotulo = "planilha"
     if a.saida:
         open(a.saida, "w", encoding="utf-8").write(md + "\n")
