@@ -203,7 +203,7 @@ def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None):
 
 def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=None,
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
-             faixas=None, elast=None):
+             faixas=None, elast=None, ancora=None):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
     if faixas:
@@ -295,6 +295,8 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         margem_medido=(liq - custo_medido) / receita if receita else 0.0,
         equilibrio=preco_do_alvo(custo_medido, u, 0.0, receita_base),
         rateio_frac=max(P["rateio_piso"], cpfs * P["rateio_por_cpf"]),
+        # o que o credor paga HOJE é a âncora que vale; sem isso, a genérica
+        ancora=(ancora if ancora else P["ancora"]), ancora_propria=bool(ancora),
         tent_contratada=tent_contratada, tent_esperada=tent_esperada, realizacao=r,
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
@@ -489,8 +491,10 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None):
     A("|---|--:|---|")
     A(f"| Preço por unidade | {br(c['preco'])} | |")
     A(f"| Equilíbrio por unidade | {br(equil)} | preço que zera a conta |")
-    A(f"| Âncora de mercado | {br(P['ancora'])} | posição humana + plataforma |")
-    folga = 1 - equil / P["ancora"]
+    A(f"| Âncora de mercado | {br(c['ancora'])} | "
+      + ("o que o credor paga hoje |" if c["ancora_propria"]
+         else "posição humana + plataforma |"))
+    folga = 1 - equil / c["ancora"]
     A(f"| **Folga até a âncora** | **{folga*100:.0f}%** | espaço para margem, desconto e variação |")
     if equil > c["preco"]:
         A("")
@@ -563,6 +567,9 @@ def main():
     ap.add_argument("--pas", type=float, default=0, help="posições humanas de transbordo")
     ap.add_argument("--pa-custo", type=float, default=None,
                     help=f"custo por posição (default {P['pa_humana']:.0f})")
+    ap.add_argument("--ancora", type=float, default=None,
+                    help="o que o credor paga HOJE por unidade equivalente; sem isso, "
+                         f"a âncora genérica de R$ {P['ancora']:.0f}")
     ap.add_argument("--recuperacao", type=float, default=None, help="R$ recuperados/mês na meta")
     ap.add_argument("--fee-variavel", type=float, default=None, help="%% blended da tabela do credor")
     ap.add_argument("--faixas", default=None,
@@ -582,7 +589,7 @@ def main():
     c = calcular(a.cpfs, a.regua, a.wa, a.sms, a.email, a.telefones, a.realizacao, a.preco,
                  alvo=(a.alvo / 100 if a.alvo is not None else None),
                  receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
-                 pas=a.pas, pa_custo=a.pa_custo, faixas=faixas,
+                 pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                  elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100))
     md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente)
     if a.saida:
