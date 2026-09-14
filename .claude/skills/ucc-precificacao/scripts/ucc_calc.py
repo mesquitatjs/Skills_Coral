@@ -221,6 +221,42 @@ def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None, cenario=No
     )
 
 
+# ── ficha de entrada ─────────────────────────────────────────────────────────
+# O VEREDITO de cada entrada — informada, assumida por nós, ou faltando — sai do motor,
+# não de quem renderiza. A tela e a planilha só escolhem palavras; o julgamento é um só,
+# e por isso o harness consegue compará-lo. Escrito duas vezes, ele divergiria em
+# silêncio, e uma planilha que diz "tudo informado" sobre uma cotação furada é pior que
+# uma planilha sem ficha.
+FICHA_CHAVES = ("cpfs", "faixas", "entrada_mes", "base_meta", "carteira_entrada",
+                "regua", "telefones", "cadencia", "carteira_faixa", "meta", "aliq",
+                "ancora", "transbordo")
+
+
+def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbordo,
+           entrada_sem_valor):
+    aging = bool(lf)
+    ent = sum(l["entrada_mes"] for l in lf)
+    na = lambda cond, v: v if cond else "na"
+    return {
+        "cpfs": "ok" if cpfs > 0 else "falta",
+        "faixas": "ok" if aging and any(l["cpfs"] > 0 for l in lf) else "falta",
+        "entrada_mes": "ok" if ent > 0 else "assumido",
+        # com fluxo e meta na faixa, a base default ('trabalhado') é uma escolha NOSSA
+        "base_meta": na(ent > 0, "assumido" if any(
+            l["entrada_mes"] > 0 and l["meta"] > 0 and l["base_meta"] == "trabalhado"
+            for l in lf) else "ok"),
+        "carteira_entrada": na(ent > 0, "falta" if entrada_sem_valor else "ok"),
+        "regua": "ok" if regua > 0 else "falta",
+        "telefones": "ok" if telefones != 1.0 else "assumido",
+        "cadencia": "ok" if (wa + sms + email) > 0 else "assumido",
+        "carteira_faixa": na(aging, "falta" if any(l["carteira"] <= 0 for l in lf) else "ok"),
+        "meta": na(aging, "ok" if any(l["meta"] > 0 for l in lf) else "falta"),
+        "aliq": na(aging, "ok" if any(l["aliq"] > 0 for l in lf) else "falta"),
+        "ancora": "ok" if ancora_propria else "assumido",
+        "transbordo": "ok" if transbordo > 0 else "assumido",
+    }
+
+
 def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=None,
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
              faixas=None, elast=None, ancora=None, cenario=None):
@@ -325,6 +361,9 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         # entradas ecoadas: a proposta escreve as premissas, e elas têm de vir do mesmo
         # objeto que gerou o preço — reescrevê-las à mão é como a premissa e a conta divergem
         tel=telefones, cad=dict(wa=wa, sms=sms, email=email), regua=regua,
+        ficha=_ficha(cpfs, regua, telefones, wa, sms, email, lf,
+                     bool(ancora), transbordo,
+                     [l["nome"] for l in lf if l.get("carteira_entrada_lacuna")]),
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
 
@@ -408,6 +447,29 @@ def _restricao(preco, u, ancora, recuperado):
         return dict(restricao=k, restricao_teto=v, restricao_folga=v - preco)
     menor = min(v for _, v in tetos)
     return dict(restricao="margem_alvo", restricao_teto=menor, restricao_folga=menor - preco)
+
+
+FICHA_LINHAS = (
+    ("cpfs", "CPFs na carteira", "sem isto não há dimensionamento"),
+    ("faixas", "CPFs por faixa de atraso",
+     "saldo em R$ não é proxy de CPF — sem isto não há merecimento nem gatilho"),
+    ("entrada_mes", "Entrada mensal por faixa",
+     "a faixa curta é fluxo; assumir só o estoque subestima quem mais recupera"),
+    ("base_meta", "Denominador da meta",
+     "a mesma taxa vale valores muito diferentes conforme a base"),
+    ("carteira_entrada", "R$ que entra por mês",
+     "entra no custo e fica fora da recuperação — o preço sai como TETO"),
+    ("regua", "Régua de tentativas/dia", "dirige telecom e capacidade"),
+    ("telefones", "Telefones por CPF",
+     "o discador capeia por linha; 2 telefones dobram a tentativa efetiva"),
+    ("cadencia", "Cadência por canal", "é a maior linha variável do custo"),
+    ("carteira_faixa", "Carteira em R$ por faixa", "sem isto não há variável, só valor fixo"),
+    ("meta", "Recuperação observada por faixa",
+     "NUNCA usar a declarada: ela crava o gatilho no piso"),
+    ("aliq", "Tabela de comissionamento", "sem isto o híbrido com gatilho não existe"),
+    ("ancora", "O que o credor paga hoje", "é a âncora competitiva real"),
+    ("transbordo", "Transbordo humano", "havendo fila humana, o custo por posição entra aqui"),
+)
 
 
 def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=None):
@@ -626,6 +688,35 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "não tem espelho do lado que dá certo, e uma banda simétrica seria uma banda falsa.")
 
     A("")
+    S("Ficha de entrada")
+    A("")
+    A("O que veio do credor, o que **nós** assumimos, e o que falta. Um preço construído sobre "
+      "entrada assumida não é errado — é condicional, e a condição tem de estar escrita.")
+    A("")
+    A("| Entrada | Como está | Sem isso |")
+    A("|---|---|---|")
+    for chave, rot, sem in FICHA_LINHAS:
+        est = c["ficha"][chave]
+        if est == "na":
+            continue
+        marca = {"ok": "informado", "assumido": "**assumido**", "falta": "⛔ **falta**"}[est]
+        A(f"| {rot} | {marca} | " + ("" if est == "ok" else sem) + " |")
+    faltas = [rot for chave, rot, _ in FICHA_LINHAS if c["ficha"][chave] == "falta"]
+    assumidas = [rot for chave, rot, _ in FICHA_LINHAS if c["ficha"][chave] == "assumido"]
+    A("")
+    if faltas:
+        n = len(faltas)
+        A(f"> ⛔ **{n} entrada{'' if n == 1 else 's'} "
+          f"falta{'' if n == 1 else 'm'}:** {', '.join(faltas)}. "
+          "Peça ao credor antes de levar o número.")
+        A("")
+    if assumidas:
+        A(f"> ⚠️ **Assumido por nós:** {', '.join(assumidas)}. Escreva na proposta — é o que "
+          "dá base à conversa de reajuste se a realidade vier diferente.")
+    if not faltas and not assumidas:
+        A("> ✅ Todas as entradas vieram do credor.")
+
+    A("")
     S("Leitura contra as âncoras")
     A("")
     equil = c["equilibrio"]
@@ -638,6 +729,19 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
          else "posição humana + plataforma |"))
     folga = 1 - equil / c["ancora"]
     A(f"| **Folga até a âncora** | **{folga*100:.0f}%** | espaço para margem, desconto e variação |")
+    A("")
+    rot_r = {"ancora": "a âncora", "teto_por_real": "o teto por R$ 1 recuperado",
+             "margem_alvo": "a margem alvo"}[c["restricao"]]
+    if c["restricao_folga"] < 0:
+        A(f"> ⛔ **Restrição ativa: {rot_r}.** O preço está "
+          f"**{br(-c['restricao_folga'])} acima** do teto de {br(c['restricao_teto'])}. "
+          "É este número que precisa ceder — não o próximo desconto.")
+    elif c["restricao"] == "margem_alvo":
+        A(f"> ✅ **Restrição ativa: a margem alvo.** O preço cabe nos dois tetos, com "
+          f"**{br(c['restricao_folga'])} de folga** até o mais baixo ({br(c['restricao_teto'])}). "
+          "É o espaço que existe para desconto.")
+    else:
+        A(f"> **Restrição ativa: {rot_r}** — {br(c['restricao_folga'])} de folga.")
     if equil > c["preco"]:
         A("")
         A(f"> ⛔ **O equilíbrio ({br(equil)}) está ACIMA do preço ({br(c['preco'])}).** "
@@ -1140,8 +1244,10 @@ def main():
     ap.add_argument("--modalidade", choices=("fixo", "hibrido"), default="fixo",
                     help="modalidade da proposta (default fixo)")
     ap.add_argument("--validade", default=None, help="validade da proposta, ex.: '30 dias'")
-    ap.add_argument("--banda", action="store_true",
-                    help="acrescenta a banda de execução (pessimista/base/otimista)")
+    # a banda entra por DEFAULT: num contrato de valor fixo o desvio de execução é risco
+    # nosso, e um resultado em ponto esconde justamente o que a banda existe para mostrar
+    ap.add_argument("--sem-banda", action="store_true",
+                    help="omite a banda de execução (ela entra por default)")
     ap.add_argument("--ancora", type=float, default=None,
                     help="o que o credor paga HOJE por unidade equivalente; sem isso, "
                          f"a âncora genérica de R$ {P['ancora']:.0f}")
@@ -1176,7 +1282,7 @@ def main():
                  pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                  elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100))
     cen = None
-    if a.banda:
+    if not a.sem_banda:
         cen = banda(preco_base=(a.preco if a.alvo is None else None),
                     cpfs=a.cpfs, regua=a.regua, wa=a.wa, sms=a.sms, email=a.email,
                     telefones=a.telefones,

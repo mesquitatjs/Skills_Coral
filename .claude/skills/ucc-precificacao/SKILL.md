@@ -48,7 +48,8 @@ python3 scripts/ucc_calc.py --cpfs 12000 --regua 4 --wa 1 --sms 2 --email 0 \
 ```
 
 Opcionais: `--telefones 1.6` · `--realizacao 0.8` · `--preco 8000` ·
-`--recuperacao 117530 --fee-variavel 6.27` (liga o bloco de custo por R$ 1 recuperado).
+`--recuperacao 117530 --fee-variavel 6.27` (liga o bloco de custo por R$ 1 recuperado) ·
+`--sem-banda` (a banda de execução entra por default).
 
 **Deriva o preço do custo em vez de fixá-lo** com `--alvo 20` (margem alvo em %). Com `--alvo 0`
 sai o equilíbrio exato. Cada carteira tem o seu preço, porque cada uma custa diferente.
@@ -95,20 +96,29 @@ credor tiver número próprio, e diga na planilha que é premissa.
 
 ### Leia a saída com estes olhos
 
-1. **Use a linha "pela medição", não a "premissa do modelo".** A premissa de telecom fixo por
+0. **Comece pela ficha de entrada.** Ela diz o que veio do credor, o que **nós** assumimos e o
+   que falta. Preço sobre entrada assumida não é errado — é condicional, e a condição vai escrita
+   na proposta. Entrada faltando é pergunta ao credor, não arredondamento.
+1. **A restrição ativa diz o que precisa ceder.** Se o preço fura a âncora ou o teto por R$ 1
+   recuperado, é esse número que tem de mudar — não o próximo desconto. Se quem manda é a margem
+   alvo, a folga impressa é o espaço real de desconto.
+2. **A banda de execução é o risco que fica do nosso lado.** Num contrato de valor fixo, régua
+   realizada no teto e mailing com mais telefones por CPF podem virar o sinal da margem. A
+   planilha imprime os três cenários com o **mesmo preço** — não três preços.
+3. **Use a linha "pela medição", não a "premissa do modelo".** A premissa de telecom fixo por
    unidade erra nos dois sentidos, e o script diz de quanto e para que lado.
-2. **Se o equilíbrio por unidade passar do preço**, o deal nasce negativo. Não maquie: reduza
+4. **Se o equilíbrio por unidade passar do preço**, o deal nasce negativo. Não maquie: reduza
    cadência, reduza régua, ou reprecifique.
-3. **Folga até a âncora de R$ 12.000** é o espaço que existe para margem, desconto e variação de
+5. **Folga até a âncora de R$ 12.000** é o espaço que existe para margem, desconto e variação de
    intensidade. Folga curta significa que não cabe desconto por volume.
-4. **Merecimento decide escopo antes de decidir preço.** A coluna **R$ por R$ 1 recuperado**
+6. **Merecimento decide escopo antes de decidir preço.** A coluna **R$ por R$ 1 recuperado**
    põe custo e recuperação na mesma linha. Faixa com recuperação zero levando fatia grande do
    custo não é problema de preço — é pergunta ao credor sobre por que ela está no escopo (na
    Cayena, 82% do custo em faixas que devolvem nada).
-5. **Cortar cadência por faixa é ordens de grandeza melhor que cortar por canal na base inteira.**
+7. **Cortar cadência por faixa é ordens de grandeza melhor que cortar por canal na base inteira.**
    O rodapé do merecimento imprime quanto se destrói por R$ 1 economizado; acima de R$ 1 o corte
    destrói mais do que gera.
-6. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
+8. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
    o adicional de IRPJ entra na conta e a carga efetiva vai de 16,33% para até 19,53%. A planilha
    imprime a alíquota efetiva do contrato — confira se ela bate com a faixa que você esperava.
 
