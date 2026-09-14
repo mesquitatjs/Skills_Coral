@@ -121,6 +121,29 @@ qual o maior risco, e o que você precisa que seja decidido. Sem repetir a tabel
 
 ## Etapa 2 — Proposta (só depois de aprovada)
 
+### A proposta é GERADA, não escrita à mão
+
+```bash
+python3 scripts/ucc_calc.py --cpfs 12000 --regua 4 --wa 1 --sms 2 --email 0 --alvo 20 \
+        --proposta --cliente "Nome" --validade "30 dias" --saida proposta.md
+```
+
+`--modalidade hibrido` troca o bloco de investimento pelo fixo + tabela do credor por faixa.
+
+**Sai do mesmo objeto que gerou a planilha.** Reescrever à mão a partir dela é como o número
+diverge: alguém arredonda, alguém copia a versão anterior, e a premissa deixa de bater com o
+preço que ela sustenta.
+
+**Duas recusas, não avisos** — o script não escreve o arquivo:
+
+- ⛔ **Vazamento da conta interna.** Confere o texto contra o vocabulário proibido (custo,
+  margem, tributo, âncora, nome de tabela, de ferramenta e de fornecedor) **e** contra os
+  valores da conta formatados como aparecem na planilha. Preço e total passam: são a oferta.
+- ⛔ **Híbrido cujo variável nunca ativaria.** Se nenhuma faixa tem alíquota **e** recuperação
+  observada ao mesmo tempo, a tabela de êxito é decorativa e o contrato é de valor fixo com
+  enfeite. Já aconteceu no contrato de referência e o furo apareceu depois de assinado. Na
+  Cayena a recusa dispara: a alíquota cobre 61+ e a recuperação inteira está em 1-60.
+
 ### Regras invioláveis
 
 - ⛔ **Nenhum custo, nenhuma margem, nenhum break-even.** A proposta diz preço e escopo.

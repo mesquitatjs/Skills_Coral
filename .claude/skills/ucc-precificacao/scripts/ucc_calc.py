@@ -321,6 +321,9 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         **_restricao(preco, u, (ancora if ancora else P["ancora"]),
                      sum(l["recuperado"] for l in lf)),
         tent_contratada=tent_contratada, tent_esperada=tent_esperada, realizacao=r,
+        # entradas ecoadas: a proposta escreve as premissas, e elas têm de vir do mesmo
+        # objeto que gerou o preço — reescrevê-las à mão é como a premissa e a conta divergem
+        tel=telefones, cad=dict(wa=wa, sms=sms, email=email), regua=regua,
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
 
@@ -683,6 +686,211 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "a operação medida é predominantemente de voz")
     return "\n".join(L)
 
+# ── proposta ao cliente ───────────────────────────────────────────────────────
+# ⛔ A proposta diz PREÇO e ESCOPO. Custo, margem, equilíbrio, rateio e tributo são
+# conta nossa e não atravessam para cá. A regra é velha; o que é novo é ela passar a
+# ser CONFERIDA — ver `_conferir_proposta`, que recusa o texto em vez de avisar.
+
+# vocabulário que não pode aparecer num documento de cliente: ou expõe a nossa conta,
+# ou é identificador técnico (a regra permanente de 18/08 do projetos_coral)
+PROIBIDO = (
+    "custo", "margem", "break-even", "breakeven", "equilíbrio", "equilibrio",
+    "rateio", "compartilhado", "tributo", "tributár", "irpj", "lucro presumido",
+    "âncora", "ancora", "capacidade ociosa", "coeficiente",
+    "bigquery", "motherduck", "mart_", "fct_", "stg_", "dim_", "sub_portfolio",
+    "ucc_calc", "duckdb", "vercel", "verso", "vectra", "sinergytech", "khomp", "vonex",
+)
+
+
+def _conferir_proposta(texto, c):
+    """Recusa a proposta se ela vazar a nossa conta. Falha, não avisa.
+
+    Um gerador que PODE vazar é pior que um humano escrevendo à mão, porque o humano
+    lê o que escreveu. Duas checagens:
+      · vocabulário proibido — custo, margem, tributo, nome de tabela, de fornecedor;
+      · os VALORES da conta interna, formatados como aparecem na planilha. O preço e o
+        total passam de propósito: são a oferta.
+    """
+    baixo = texto.lower()
+    achados = [t for t in PROIBIDO if t in baixo]
+
+    # o preço e o total SÃO a oferta e aparecem de propósito. Um valor interno que
+    # calhe de bater com eles não é vazamento — e acusar isso mataria o guard pelo lado
+    # do alarme falso. Acontece de verdade: com 5 unidades a 20%, o resultado do mês dá
+    # exatamente o preço de uma unidade, porque 5 × 0,20 = 1.
+    permitidos = {br(c["preco"]), br(c["preco"] * c["uccs"])}
+    proibidos_num = {
+        "o custo medido": c["custo_medido"], "o custo pelo modelo": c["custo_modelo"],
+        "a capacidade": c["capacidade"], "o equilíbrio": c["equilibrio"],
+        "o tributo": c["tributo"], "o telecom medido": c["tel_med"],
+        "o resultado": c["liquida"] - c["custo_medido"],
+    }
+    for rot, v in proibidos_num.items():
+        if v and br(v) in texto and br(v) not in permitidos:
+            achados.append(f"{rot} ({br(v)})")
+
+    if achados:
+        raise SystemExit(
+            "⛔ A proposta vazaria a conta interna e NÃO foi escrita.\n   "
+            + "\n   ".join(f"· {a}" for a in achados)
+            + "\n   Proposta diz preço e escopo. O resto é planilha.")
+    return texto
+
+
+def _conferir_hibrido(c):
+    """O híbrido só se sustenta onde a alíquota encontra recuperação.
+
+    ⛔ Uma tabela de êxito cujas faixas com alíquota recuperam ZERO é decorativa: o
+    variável nunca ativa e o contrato é de valor fixo com uma tabela de enfeite. Já
+    aconteceu — o contrato de referência foi assinado assim e o furo apareceu depois.
+    Oferecer isso é prometer um upside que a própria carteira do credor diz não existir,
+    então a proposta não sai; volta para a mesa.
+    """
+    if not c["faixas"]:
+        raise SystemExit(
+            "⛔ Híbrido sem a carteira aberta por faixa de atraso. A meta do gatilho é por "
+            "faixa — sem o aging não há meta defensável. Use a modalidade fixa ou peça o aging.")
+    vivas = [l for l in c["faixas"] if l["aliq"] > 0 and l["meta"] > 0]
+    if vivas:
+        return
+    com_aliq = [l["nome"] for l in c["faixas"] if l["aliq"] > 0]
+    com_meta = [l["nome"] for l in c["faixas"] if l["meta"] > 0]
+    raise SystemExit(
+        "⛔ O variável deste híbrido NUNCA ativaria — a proposta não foi escrita.\n"
+        f"   · faixas com alíquota: {', '.join(com_aliq) or 'nenhuma'}\n"
+        f"   · faixas que recuperam: {', '.join(com_meta) or 'nenhuma'}\n"
+        "   Não há interseção: a tabela de êxito cobre justamente onde a carteira não "
+        "devolve nada.\n   Isso é contrato de valor fixo com tabela de enfeite. Leve o "
+        "achado ao credor antes de propor — ou proponha a modalidade fixa.")
+
+
+def proposta(c, cliente="—", modalidade="fixo", validade=None, obs=None):
+    """Proposta comercial a partir do MESMO objeto que gerou a planilha.
+
+    Escrever à mão a partir da planilha é como o número diverge: alguém arredonda, alguém
+    copia a versão anterior. Aqui a proposta e a planilha saem do mesmo `calcular`.
+    """
+    L = []
+    A = L.append
+    sec = iter(range(1, 20))
+
+    def S(titulo):
+        A("")
+        A(f"## {next(sec)}. {titulo}")
+        A("")
+
+    if modalidade != "fixo":
+        _conferir_hibrido(c)
+    total = c["preco"] * c["uccs"]
+    u = c["uccs"]
+    un = "unidade" if u == 1 else "unidades"
+
+    A(f"# Proposta comercial — {cliente}")
+    A("")
+    A(f"**Coral** · operação de cobrança digital ponta a ponta"
+      + (f" · validade {validade}" if validade else ""))
+
+    S("O que a unidade entrega")
+    A("Cada unidade opera a carteira inteira que ela cobre, do contato à confirmação do acordo:")
+    A("")
+    A("- **Contato multicanal** — voz com bot próprio, WhatsApp, SMS e e-mail na mesma jornada, "
+      "com transbordo para atendimento humano quando o caso pede.")
+    A("- **Inteligência de acionamento** — segmentação da carteira, priorização por propensão e "
+      "teste A/B contínuo de oferta, horário e cadência.")
+    A("- **Operação assistida** — monitoramento do discador em tempo real, com correção "
+      "automática de ritmo e de rota ao longo do dia.")
+    A("- **Prestação de contas** — painel de acompanhamento e relatório periódico com o funil "
+      "aberto: ligações, contato efetivo, acordos e pagamentos.")
+
+    S("Dimensionamento")
+    if c["faixas"]:
+        A(f"A carteira apresentada tem **{num(c['cpfs'])} CPFs** distribuídos em "
+          f"{len(c['faixas'])} faixas de atraso"
+          + (f", com **{num(c['entrada_mes'])} entrando por mês** nas faixas curtas"
+             if c.get("entrada_mes") else "") + ".")
+    else:
+        A(f"A carteira apresentada tem **{num(c['cpfs'])} CPFs**.")
+    A("")
+    A(f"Uma unidade cobre até **{num(P['tam_ucc'])} CPFs** com a jornada completa. "
+      f"Esta carteira pede **{u} {un}**.")
+    A("")
+    A(f"| | |")
+    A(f"|---|--:|")
+    A(f"| CPFs na carteira | **{num(c['cpfs'])}** |")
+    A(f"| Unidades | **{u}** |")
+    A(f"| Ocupação | {num(c['ocupacao']*100, 0)}% |")
+    A("")
+    A("Não vendemos unidade acima do tamanho: acima dele a jornada perde intensidade por CPF "
+      "e a carteira passa a ser trabalhada pela metade sem ninguém perceber.")
+
+    S("Investimento")
+    A(f"| | |")
+    A(f"|---|--:|")
+    A(f"| Por unidade | **{br(c['preco'])}** /mês |")
+    A(f"| Unidades | {u} |")
+    A(f"| **Total mensal** | **{br(total)}** |")
+    A("")
+    if modalidade == "fixo":
+        A("**Valor fixo.** O mesmo valor todo mês, independente do volume recuperado. É a "
+          "modalidade indicada para carteira sem histórico de recuperação por faixa — sem essa "
+          "série não há meta defensável para um componente variável, e meta mal calibrada vira "
+          "desconto disfarçado ou cobrança indevida.")
+    else:
+        A("**Híbrido.** O valor fixo acima **mais** a remuneração variável que vocês já praticam "
+          "por faixa de atraso, com um ajuste de até ±15% na alíquota conforme a recuperação "
+          "fique acima ou abaixo da meta da faixa.")
+        A("")
+        A("A meta de cada faixa é a **recuperação observada** dela, apurada no histórico que "
+          "vocês compartilharem — não uma meta declarada. Meta em cima de expectativa deixa o "
+          "ajuste cravado no piso todos os meses, o que é desconto fixo e não gatilho.")
+        fx = [l for l in c["faixas"] if l["aliq"] > 0]
+        if fx:
+            A("")
+            A("| Faixa | Alíquota | Meta observada |")
+            A("|---|--:|--:|")
+            for l in fx:
+                A(f"| {l['nome']} | {num(l['aliq']*100, 1)}% | "
+                  + (f"{num(l['meta']*100, 1)}%" if l["meta"] else "a apurar") + " |")
+
+    S("Premissas")
+    A("O preço acima vale sob estas condições. Elas estão escritas porque é o que dá base a uma "
+      "conversa de reajuste, para os dois lados — se a intensidade mudar, muda a conta.")
+    A("")
+    A("| Premissa | Valor |")
+    A("|---|--:|")
+    A(f"| Tentativas de voz por CPF por dia | **{num(c['regua'], 1)}** |")
+    A(f"| Telefones por CPF no mailing | **{num(c.get('tel', 1.0), 1)}** |")
+    for rot, v in (("WhatsApp", c["cad"]["wa"]), ("SMS", c["cad"]["sms"]),
+                   ("E-mail", c["cad"]["email"])):
+        A(f"| {rot} por CPF por mês | " + (f"**{num(v, 1)}**" if v else "não contratado") + " |")
+    A("")
+    A("O discador aplica o limite de tentativas **por linha**, não por titular. Um CPF com dois "
+      "telefones consome o dobro da régua — por isso telefones por CPF é premissa, e não "
+      "detalhe. Se o mailing entregue tiver mais telefones que o previsto aqui, revisamos juntos "
+      "antes de subir a operação.")
+
+    S("O que está fora")
+    A("- **Implantação e integração** — orçadas à parte, conforme o escopo de integração.")
+    A("- **Posições humanas dedicadas** — o transbordo previsto atende exceção; operação "
+      "assistida por pessoas em volume é escopo separado.")
+    fora = [rot for rot, v in (("WhatsApp", c["cad"]["wa"]), ("SMS", c["cad"]["sms"]),
+                               ("e-mail", c["cad"]["email"])) if not v]
+    if fora:
+        A(f"- **{' · '.join(fora)}** — não contratado nesta jornada. Incluir muda a premissa "
+          "de cadência e o valor.")
+    A("- **Ações judiciais e cobrança presencial.**")
+
+    S("Próximos passos")
+    A("1. Validação das premissas de régua, cadência e telefones por CPF sobre o mailing real.")
+    A("2. Alinhamento de integração: recebimento da carteira, retorno de acordos e pagamentos.")
+    A("3. Piloto com a carteira acordada e leitura conjunta do funil na primeira quinzena.")
+
+    if obs:
+        S("Observações")
+        A(obs)
+
+    return _conferir_proposta("\n".join(L), c)
+
 
 def main():
     ap = argparse.ArgumentParser(description="Planilha de precificação UCC")
@@ -705,6 +913,11 @@ def main():
     ap.add_argument("--pas", type=float, default=0, help="posições humanas de transbordo")
     ap.add_argument("--pa-custo", type=float, default=None,
                     help=f"custo por posição (default {P['pa_humana']:.0f})")
+    ap.add_argument("--proposta", action="store_true",
+                    help="gera a PROPOSTA do cliente (sem custo, sem margem) no lugar da planilha")
+    ap.add_argument("--modalidade", choices=("fixo", "hibrido"), default="fixo",
+                    help="modalidade da proposta (default fixo)")
+    ap.add_argument("--validade", default=None, help="validade da proposta, ex.: '30 dias'")
     ap.add_argument("--banda", action="store_true",
                     help="acrescenta a banda de execução (pessimista/base/otimista)")
     ap.add_argument("--ancora", type=float, default=None,
@@ -741,10 +954,15 @@ def main():
                     pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                     elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
                                email=a.elast_email / 100))
-    md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen)
+    if a.proposta:
+        md = proposta(c, cliente=a.cliente, modalidade=a.modalidade, validade=a.validade)
+        rotulo = "proposta"
+    else:
+        md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen)
+        rotulo = "planilha"
     if a.saida:
         open(a.saida, "w", encoding="utf-8").write(md + "\n")
-        print(f"planilha escrita em {a.saida}")
+        print(f"{rotulo} escrita em {a.saida}")
     else:
         print(md)
 
