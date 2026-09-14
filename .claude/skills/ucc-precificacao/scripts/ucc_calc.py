@@ -88,7 +88,11 @@ def carregar_faixas(caminho, padrao):
         faixas.append({
             "nome": f.get("nome", f"faixa {i}"),
             "cpfs": float(f["cpfs"]), "carteira": float(f.get("carteira", 0)),
+            "entrada_mes": float(f.get("entrada_mes", 0) or 0),
+            "carteira_entrada": (float(f["carteira_entrada"])
+                                 if f.get("carteira_entrada") is not None else None),
             "meta": float(f.get("meta", 0)) / 100, "aliq": float(f.get("aliq", 0)) / 100,
+            "base_meta": str(f.get("base_meta", "trabalhado")).strip().lower(),
             "regua": float(f.get("regua", padrao["regua"])),
             "wa": float(f.get("wa", padrao["wa"])), "sms": float(f.get("sms", padrao["sms"])),
             "email": float(f.get("email", padrao["email"])),
@@ -144,6 +148,46 @@ def num(v, casas=0):
     return f"{v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def _normalizar_faixa(f):
+    """Resolve ESTOQUE + ENTRADA MENSAL da faixa.
+
+    A faixa curta é FLUXO: o caso entra, é trabalhado e sai no mesmo mês. Dimensionar pela foto
+    subestima quem mais recupera — na Cayena a 01-30 tem 619 parados contra ~3.400 entrando por
+    mês, e a foto erra por 5×, para baixo, justamente na faixa onde mora 98,6% da recuperação.
+
+    Faixa sem `entrada_mes` se comporta exatamente como antes (trabalhado = estoque).
+
+    ⛔ O R$ da entrada NÃO é derivado do ticket do estoque. Quarenta linhas acima o carregador já
+    recusa derivar CPFs de reais por ticket médio uniforme; o inverso tem o mesmo defeito e morde
+    mais forte, porque os CPFs parados numa faixa são justamente os que NÃO pagaram. Derivando na
+    Cayena, a 01-30 passava a "recuperar" R$ 8,7M/mês numa carteira de R$ 22,6M — o credor giraria
+    o livro inteiro a cada 2,6 meses. Sem `carteira_entrada` informada, a entrada entra no CUSTO
+    (os CPFs são trabalhados de verdade) e fica FORA da recuperação, declarada como lacuna. O
+    preço que sai daí é teto: custo cheio contra receita só do que foi medido.
+
+    ⛔ `base_meta` declara **sobre qual denominador a meta de recuperação foi medida** —
+    `estoque` | `entrada` | `trabalhado` (default). Sem isso o número do credor entra sobre o que
+    o simulador tiver à mão, e uma taxa medida sobre o que vence no mês aplicada sobre
+    estoque+entrada infla a recuperação em múltiplos. Na Cayena a 01-30 recuperava R$ 10,3M numa
+    carteira de R$ 22,6M porque a taxa de 93,2% (fatia do que venceu) foi lida como se fosse taxa
+    sobre tudo que a faixa carrega.
+    """
+    cpfs = float(f["cpfs"])
+    ent = float(f.get("entrada_mes", 0) or 0)
+    cart = float(f.get("carteira", 0) or 0)
+    ce = f.get("carteira_entrada")
+    lacuna = ce is None and ent > 0
+    ce = 0.0 if ce is None else float(ce)
+    base = str(f.get("base_meta", "trabalhado")).strip().lower()
+    if base not in ("estoque", "entrada", "trabalhado"):
+        raise SystemExit(f"⛔ faixa {f.get('nome','sem nome')}: base_meta inválida ({base!r}). "
+                         "Use estoque | entrada | trabalhado.")
+    carteira_meta = {"estoque": cart, "entrada": ce, "trabalhado": cart + ce}[base]
+    return {**f, "entrada_mes": ent, "carteira_entrada": ce, "base_meta": base,
+            "trabalhado": cpfs + ent, "carteira_trab": cart + ce,
+            "carteira_meta": carteira_meta, "carteira_entrada_lacuna": lacuna}
+
+
 def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None):
     """Acionamento de um bloco de CPFs sob uma régua e uma cadência."""
     tent_c = regua * telefones
@@ -163,7 +207,9 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
     if faixas:
-        cpfs = sum(f["cpfs"] for f in faixas)   # a soma das faixas é a verdade da carteira
+        faixas = [_normalizar_faixa(f) for f in faixas]
+        # o TRABALHADO (estoque + entrada do mês) é a verdade da carteira, não a foto
+        cpfs = sum(f["trabalhado"] for f in faixas)
     u = ceil(cpfs / P["tam_ucc"])
     # o discador capeia POR LINHA → telefones/CPF multiplicam a tentativa efetiva
     tent_contratada = regua * telefones
@@ -176,12 +222,12 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     # ── faixas: cada uma com a sua régua e cadência; o corte é medido contra a CHEIA ──
     lf = []
     for f in (faixas or []):
-        a = _acionar(f["cpfs"], f["regua"], telefones, f["wa"], f["sms"], f["email"])
-        cheia = _acionar(f["cpfs"], f["regua"], telefones, wa, sms, email)
+        a = _acionar(f["trabalhado"], f["regua"], telefones, f["wa"], f["sms"], f["email"])
+        cheia = _acionar(f["trabalhado"], f["regua"], telefones, wa, sms, email)
         perda_frac = (max(0.0, wa - f["wa"]) * elast["wa"]
                       + max(0.0, sms - f["sms"]) * elast["sms"]
                       + max(0.0, email - f["email"]) * elast["email"])
-        rec_base = f["carteira"] * f["meta"]
+        rec_base = f["carteira_meta"] * f["meta"]
         acion = a["telecom"] + a["msg"] + a["crm"]
         lf.append(dict(
             **f, **{k: a[k] for k in ("telecom", "msg", "crm", "tent_esperada")},
@@ -208,16 +254,16 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
                else cpfs * P["coef_telecom"] * tent_esperada)
     if lf:   # com faixas, mensageria e CRM também saem linha a linha
         for i, (nome, _, nat) in enumerate(linhas):
-            if nome == "WhatsApp":  linhas[i] = (nome, sum(l["cpfs"] * l["wa"] for l in lf) * P["wa"], nat)
-            if nome == "SMS":       linhas[i] = (nome, sum(l["cpfs"] * l["sms"] for l in lf) * P["sms"], nat)
-            if nome == "E-mail":    linhas[i] = (nome, sum(l["cpfs"] * l["email"] for l in lf) * P["email"], nat)
+            if nome == "WhatsApp":  linhas[i] = (nome, sum(l["trabalhado"] * l["wa"] for l in lf) * P["wa"], nat)
+            if nome == "SMS":       linhas[i] = (nome, sum(l["trabalhado"] * l["sms"] for l in lf) * P["sms"], nat)
+            if nome == "E-mail":    linhas[i] = (nome, sum(l["trabalhado"] * l["email"] for l in lf) * P["email"], nat)
 
     base = sum(v for _, v, _ in linhas)
     custo_medido, custo_modelo = base + tel_med, base + tel_fixo
 
     capacidade = sum(v for _, v, n in linhas if n == "Capacidade")
     for l in lf:
-        l["capacidade"] = capacidade * l["cpfs"] / cpfs if cpfs else 0.0
+        l["capacidade"] = capacidade * l["trabalhado"] / cpfs if cpfs else 0.0
         l["custo"] = l["capacidade"] + l["acionamento"]
         l["por_real"] = (l["custo"] / l["recuperado"]) if l["recuperado"] > 0 else None
         l["variavel"] = l["recuperado"] * l["aliq"]
@@ -234,7 +280,9 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         linhas=linhas, tel_fixo=tel_fixo, tel_med=tel_med,
         setup_mes=setup_mes, transbordo=transbordo, capacidade=capacidade,
         faixas=lf, elast=elast,
-        carteira=sum(l["carteira"] for l in lf),
+        carteira=sum(l["carteira_trab"] for l in lf),
+        estoque=sum(l["cpfs"] for l in lf), entrada_mes=sum(l["entrada_mes"] for l in lf),
+        entrada_sem_valor=[l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
         recuperado=sum(l["recuperado"] for l in lf),
         rec_base_total=sum(l["rec_base"] for l in lf),
         perda_total=sum(l["perda"] for l in lf),
@@ -335,7 +383,7 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None):
         for l in c["faixas"]:
             pr = ("R$ " + num(l["por_real"], 4 if l["por_real"] < 0.1 else 2)
                   if l["por_real"] is not None else "—")
-            linha = (f"| {l['nome']} | {num(l['cpfs'])} | {br(l['carteira'])} | "
+            linha = (f"| {l['nome']} | {num(l['trabalhado'])} | {br(l['carteira_trab'])} | "
                      f"{br(l['recuperado'])} | "
                      f"{num(l['recuperado']/c['recuperado']*100,1) if c['recuperado'] else '0,0'}% | "
                      f"{br(l['custo'])} | {num(l['custo']/c['custo_medido']*100,1)}% | {pr} |")
@@ -351,6 +399,20 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None):
             tot += (f" **{br(c['economia_total'])}** | **{br(c['perda_total'])}** | "
                     f"**R$ {num(c['perda_total']/c['economia_total'],2)}** |")
         A(tot)
+        if c["entrada_mes"] > 0:
+            A("")
+            A(f"> 📌 **Estoque + fluxo.** A foto da carteira tem **{num(c['estoque'])} CPFs**; "
+              f"entram **{num(c['entrada_mes'])}/mês** nas faixas curtas, e esses são trabalhados "
+              f"como qualquer outro. O dimensionamento usa o **trabalhado ({num(c['cpfs'])})** — "
+              "dimensionar pela foto subestima a faixa onde mora quase toda a recuperação.")
+        if c["entrada_sem_valor"]:
+            A("")
+            A(f"> ⛔ **LACUNA — o R$ da entrada não foi informado** em "
+              f"{', '.join(c['entrada_sem_valor'])}. Esses CPFs entram no **custo** (são "
+              "trabalhados) e ficam **fora da recuperação**, porque derivar o valor pelo ticket "
+              "do estoque assume ticket uniforme — e os CPFs parados numa faixa são justamente os "
+              "que não pagaram. **O preço que sai daqui é TETO:** custo cheio contra receita só do "
+              "que foi medido. Peça ao credor o valor que entra por mês em cada faixa.")
         mortas = [l for l in c["faixas"] if l["recuperado"] <= 0]
         if mortas:
             peso = sum(l["custo"] for l in mortas)
