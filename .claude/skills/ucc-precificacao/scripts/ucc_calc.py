@@ -121,6 +121,62 @@ COMPART_MODELOS = ("exclusivo", "aberto", "rotativo")
 ELAST = {"wa": 0.03, "sms": 0.01, "email": 0.002}
 
 
+# ── MATURAÇÃO DA CARTEIRA ────────────────────────────────────────────────────────────
+# MEDIDO na operação da Principia (sonda `principia-acionamento/scripts/_q_colchao.py`,
+# 14/09/2026, safras de 2025-01 em diante). Fração da recuperação de REGIME que uma
+# carteira já entrega no mês N de contrato.
+#
+# De onde sai: um acordo de k parcelas entrega 1/k do valor no mês em que é fechado e o
+# resto nos k-1 seguintes. Com peso w_k (por VALOR, nunca por contagem — o que vence é
+# dinheiro), o mês m da carteira entrega `SOMA_k w_k * min(m,k)/k` do regime. Medido:
+# 31,5% do R$ prometido fecha à vista, 41,7% em 7 parcelas, 10,2% em 9, e uma cauda em
+# 25 que é 5,2% do R$ e segura a rampa por dois anos.
+#
+# 📌 O primeiro valor É o colchão: se no mês 1 a carteira entrega 41,6% do regime, os
+#    outros 58,4% do regime vêm de acordo fechado em mês anterior. Colchão e rampa saem
+#    do MESMO vetor, então não podem divergir entre si.
+#
+# ⛔ É a operação da Principia — PF, educacional, voz, com uma régua de parcelamento que
+#    é dela. Outro credor tem outra curva; por isso o vetor é EDITÁVEL e a procedência
+#    aparece na ficha.
+MATURACAO = (0.416, 0.517, 0.600, 0.682, 0.761, 0.840, 0.917, 0.931, 0.946, 0.952,
+             0.956, 0.960)
+
+# Cumprimento MEDIDO só existe à vista (safra madura, 33,1% em R$ · 41,1% por contagem).
+# ⛔ O do PARCELADO não é mensurável ainda: um acordo de 7 parcelas entra como quebrado
+#    na primeira e só pode ser cumprido quando a última vencer, então numa janela curta
+#    ele aparece perto de zero por CENSURA, não por comportamento. E é justamente o
+#    parcelado que forma o colchão.
+CUMPRIMENTO_AVISTA = 0.331
+
+
+def maturacao_de(mat=None, meses=12):
+    """Normaliza o vetor de maturação: monótono, dentro de [0,1], estendido até `meses`.
+
+    Depois do último valor informado a curva fica onde estava — extrapolar uma rampa é
+    inventar recuperação que a carteira ainda não mostrou.
+    """
+    v = [float(x) for x in (mat if mat else MATURACAO)]
+    if not v:
+        raise SystemExit("⛔ maturação vazia.")
+    if any(x < 0 or x > 1 for x in v):
+        raise SystemExit(f"⛔ maturação fora de 0-100%: {v}")
+    for i in range(1, len(v)):          # uma carteira não desaprende
+        v[i] = max(v[i], v[i - 1])
+    while len(v) < int(meses):
+        v.append(v[-1])
+    return v[: int(meses)] if meses else v
+
+
+def colchao_de_regime(mat=None):
+    """Fração da recuperação de regime que vem de acordo fechado em mês anterior.
+
+    É 1 - o primeiro ponto da maturação, por construção: o que não entra no mês do
+    acordo entra depois, e o "depois" de hoje é o colchão de amanhã.
+    """
+    return 1.0 - maturacao_de(mat, 0)[0]
+
+
 def carregar_faixas(caminho, padrao):
     """Lê as faixas de um JSON. Campos de cadência ausentes herdam o contrato.
 
@@ -310,12 +366,13 @@ def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None, cenario=No
 FICHA_CHAVES = ("cpfs", "faixas", "entrada_mes", "base_meta", "carteira_entrada",
                 "regua", "telefones", "cadencia", "carteira_faixa", "meta", "aliq",
                 "ancora", "transbordo", "compartilhamento", "desconto", "colchao",
-                "escopo", "serie", "parcelamento", "produtos")
+                "escopo", "serie", "parcelamento", "produtos", "maturacao")
 
 
 def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbordo,
            entrada_sem_valor, compart_modelo="exclusivo", captura=1.0,
-           colchao_ativo=False, lf_fora=(), serie_stat=None, produtos=""):
+           colchao_ativo=False, lf_fora=(), serie_stat=None, produtos="",
+           maturacao_propria=False):
     aging = bool(lf)
     ent = sum(l["entrada_mes"] for l in lf)
     na = lambda cond, v: v if cond else "na"
@@ -351,6 +408,9 @@ def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbord
         "serie": "ok" if serie_stat and serie_stat["n"] >= 3 else "assumido",
         "parcelamento": na(aging, "ok" if any(l["parcelas"] > 0 for l in lf) else "assumido"),
         "produtos": "ok" if produtos.strip() else "assumido",
+        # a curva é MEDIDA, mas na NOSSA operação: PF, educacional, voz. Transplantá-la
+        # para outro credor é premissa, não medição — por isso "assumido" e não "ok"
+        "maturacao": "ok" if maturacao_propria else "assumido",
     }
 
 
@@ -366,7 +426,8 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
              faixas=None, elast=None, ancora=None, cenario=None,
              compart_modelo="exclusivo", captura=1.0,
-             colchao_meses=0, colchao_efic=0.0, produtos="", entradas=None):
+             colchao_meses=0, colchao_efic=0.0, produtos="", entradas=None,
+             maturacao=None):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
     # item 7 do discovery. Em mar aberto discamos a base INTEIRA (custo integral) e a
@@ -387,6 +448,21 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     if colchao_meses < 0 or not 0 <= colchao_efic <= 1:
         raise SystemExit(f"⛔ colchão inválido (meses={colchao_meses}, efic={colchao_efic}).")
     colchao_ativo = colchao_meses > 0 and colchao_efic > 0
+    # ── colchão PRÓPRIO: derivado da cadeia, não digitado ────────────────────────────
+    # O colchão herdado acima é o que a carteira TRAZ: acordo fechado por outra
+    # assessoria, que chega discando ou não. Este aqui é o outro, e ele nunca esteve na
+    # conta: o que NÓS fechamos e que continua pingando nos meses seguintes.
+    #
+    # Ele não muda a recuperação de REGIME (o mês estável recebe parcela de k safras e
+    # entrega o mesmo total), e por isso a conta estática não se mexe. O que ele muda é o
+    # CAMINHO até o regime — e é lá, na projeção de 12 meses, que a diferença aparece:
+    # o custo é integral desde o mês 1 e a receita chega em 41,6%.
+    #
+    # ⚠️ E a regra da variável vira ao contrário do herdado. Sobre acordo de terceiro a
+    # Coral não cobra; sobre o que ela mesma fechou, cobra — a parcela de outubro do
+    # acordo que fechamos em maio é recuperação NOSSA, só que atrasada.
+    mat = maturacao_de(maturacao, 0)
+    colchao_proprio_frac = 1.0 - mat[0]
     # item 6: a conta precisa de UM número por mês, o discovery pede SEIS. A média vira a
     # entrada; a série entrega o que a média esconde — dispersão e tendência.
     serie = [float(x) for x in (entradas or []) if x is not None]
@@ -441,6 +517,10 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
             acionavel=acionavel, recuperado_novo=acionavel * (1 - perda_frac),
             perda=acionavel * perda_frac,
             recuperado=colchao_mes + acionavel * (1 - perda_frac),
+            # do que NÓS recuperamos no mês, quanto já estava contratado em mês anterior.
+            # Não sai do total (regime é regime) — serve para ler a cadência: cortar canal
+            # hoje só morde a parte que ainda depende de fechar acordo novo.
+            proprio_contratado=acionavel * (1 - perda_frac) * colchao_proprio_frac,
             economia=(cheia["telecom"] + cheia["msg"] + cheia["crm"]) - acion,
         ))
     # o que as faixas FORA do escopo carregam — para o antes-e-depois aparecer na mesma tela
@@ -511,6 +591,9 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         colchao_mes=sum(l["colchao_mes"] for l in lf),
         colchao_excede=[l["nome"] for l in lf if l["colchao_excede"]],
         colchao_meses=colchao_meses, colchao_efic=colchao_efic, colchao_ativo=colchao_ativo,
+        maturacao=mat, colchao_proprio_frac=colchao_proprio_frac,
+        colchao_proprio=sum(l["proprio_contratado"] for l in lf),
+        maturacao_propria=maturacao is not None,
         faixas_fora=lf_fora, produtos=(produtos or "").strip(), serie=serie, serie_stat=serie_stat,
         cpfs_fora=sum(f["trabalhado"] for f in lf_fora),
         carteira_fora=sum(f["carteira_trab"] for f in lf_fora),
@@ -548,7 +631,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
                      bool(ancora), transbordo,
                      [l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
                      compart_modelo, captura, colchao_ativo, lf_fora, serie_stat,
-                     produtos or ""),
+                     produtos or "", maturacao is not None),
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
 
@@ -896,33 +979,70 @@ def repactuacao(uccs_assinadas, preco_assinado, **kw):
 
 
 def projecao(meses=12, rampa=None, **kw):
-    """Os 12 meses do contrato, com o payback do setup.
+    """Os 12 meses do contrato: maturação da carteira, variável do credor e payback.
 
-    Tudo na bancada é R$ por mês estático: o mês 1 de uma unidade nova é tratado como o
-    mês 12. Aqui o setup sai do regime (ele é um desembolso único, não uma mensalidade) e
-    aparece o mês em que o contrato devolve o que custou para entrar.
+    Tudo o mais na bancada é R$ por mês de REGIME — o mês 1 de um contrato novo tratado
+    como o mês 12. Aqui a diferença aparece, e ela tem duas pernas.
 
-    ⛔ **A rampa é PREMISSA, não medição.** Não temos série de ramp-up nem de churn — por
-    isso ela entra por parâmetro e, em branco, o contrato roda cheio desde o mês 1, que é
-    o não-destrutivo. Informar uma rampa otimista aqui é inventar receita.
+    **A receita variável entrava zerada.** A conta do mês somava só a fixa, e desde a
+    revisão de 10/09 é a variável que paga a margem (só fixa dá −7,6% no contrato de
+    referência; com a variável na meta, +21,2%). Uma projeção que ignora a maior das duas
+    receitas não projeta o contrato, projeta metade dele.
+
+    **E a carteira não nasce em regime.** Um acordo de k parcelas entrega 1/k no mês em
+    que é fechado; o resto pinga depois. Então o mês 1 entrega a fração `maturacao[0]` do
+    que o regime entrega — 41,6% na curva medida — enquanto o custo de acionamento é
+    INTEGRAL desde o primeiro dia (discamos a base toda no mês 1, não 41,6% dela). O
+    descasamento entre custo cheio e receita em rampa é o buraco de caixa da entrada, e
+    ele nunca esteve na tela.
+
+    ⚠️ A maturação morde a recuperação que NÓS geramos. O colchão HERDADO (saldo que o
+    credor informa, acordo de outra assessoria) chega igual desde o mês 1 — não é nosso e
+    não rampa. São dois colchões diferentes e eles entram por portas diferentes.
+
+    `rampa` (multiplicador manual) continua existindo e multiplica por cima, para quem
+    quiser modelar ramp-up de operação ou churn. Em branco vale 1,0 — não-destrutivo.
     """
     k = dict(kw)
     setup = float(k.pop("setup", 0.0) or 0.0)
+    aliq_ativa = k.pop("variavel_ativa", True)
     k["setup"] = 0.0                            # sai do regime, entra como desembolso
     c = calcular(**k)
-    regime = c["liquida"] - c["custo_medido"]
+    mat = maturacao_de(k.get("maturacao"), meses)
     rampa = list(rampa) if rampa else []
+
+    # o que NÃO rampa: colchão herdado (acordo de terceiro) e o custo (base inteira)
+    herdado = c["colchao_mes"]
+    nosso = c["recuperado"] - herdado
+    var_regime = c["variavel"] if aliq_ativa else 0.0
+
     linhas, acum = [], -setup
     for m in range(1, int(meses) + 1):
         f = float(rampa[m - 1]) if m <= len(rampa) else 1.0
-        res = regime * f
+        mt = mat[m - 1]
+        rec = (herdado + nosso * mt) * f
+        var = var_regime * mt * f               # a variável cobra sobre a NOSSA recuperação
+        bruta = c["receita"] + var
+        liq = bruta - tributo_de(bruta, c["receita_base"])
+        res = liq - c["custo_medido"]
         acum += res
-        linhas.append(dict(mes=m, fator=f, resultado=res, acumulado=acum,
-                           desembolso=setup if m == 1 else 0.0))
+        linhas.append(dict(mes=m, fator=f, maturacao=mt, recuperado=rec,
+                           receita_fixa=c["receita"], variavel=var, bruta=bruta,
+                           liquida=liq, custo=c["custo_medido"], resultado=res,
+                           acumulado=acum, desembolso=setup if m == 1 else 0.0))
+    # o regime é o último mês possível, não o primeiro — é contra ele que a rampa se lê
+    bruta_reg = c["receita"] + var_regime
+    regime = (bruta_reg - tributo_de(bruta_reg, c["receita_base"])) - c["custo_medido"]
     pay = next((l["mes"] for l in linhas if l["acumulado"] >= 0), None)
+    negativos = [l["mes"] for l in linhas if l["resultado"] < 0]
     return dict(setup=setup, regime=regime, linhas=linhas, payback=pay,
                 acumulado=linhas[-1]["acumulado"] if linhas else -setup,
-                rampa_informada=bool(rampa))
+                rampa_informada=bool(rampa), maturacao=mat,
+                variavel_ativa=aliq_ativa, variavel_regime=var_regime,
+                colchao_herdado=herdado, nosso=nosso,
+                meses_negativos=negativos,
+                # o mês 1 contra o regime: é o tamanho do buraco de entrada
+                mes1_vs_regime=(linhas[0]["resultado"] / regime - 1) if linhas and regime else 0.0)
 
 
 def premio_risco(**kw):
@@ -1027,6 +1147,8 @@ FICHA_LINHAS = (
      "promessa parcelada quebra mais; premissa escrita, fora da conta"),
     ("produtos", "Produtos cobertos por esta cotação",
      "produto com régua ou cadência própria é contrato separado"),
+    ("maturacao", "Curva de maturação — como o acordo vira caixa no tempo",
+     "o colchão sai dela; sem a do credor, vale a nossa, que é de outra carteira"),
 )
 
 
@@ -1580,18 +1702,33 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "chegar sem este número pronto.")
     if proj:
         A("")
-        S("Os 12 meses — e o payback do setup")
+        S("Os 12 meses — maturação da carteira e payback")
         A("")
         A(f"Regime: **{br(proj['regime'])}/mês**. Setup: **{br(proj['setup'])}**, desembolso "
           f"único no mês 1.")
         A("")
-        A("| Mês | Fator | Resultado | Acumulado |")
-        A("|--:|--:|--:|--:|")
+        A("Um acordo de *k* parcelas entrega 1/*k* do valor no mês em que é fechado e o resto "
+          "nos seguintes. A carteira não nasce em regime: ela **matura**. E o custo não espera "
+          "— discamos a base inteira já no mês 1.")
+        A("")
+        cab = "| Mês | Maturação | Recuperado | Fixa | Variável | Custo | Resultado | Acumulado |"
+        A(cab)
+        A("|--:|--:|--:|--:|--:|--:|--:|--:|")
         for l in proj["linhas"]:
             marca = "**" if l["mes"] == proj["payback"] else ""
-            A(f"| {marca}{l['mes']}{marca} | {num(l['fator']*100, 0)}% | {br(l['resultado'])} | "
-              f"{marca}{br(l['acumulado'])}{marca} |")
+            A(f"| {marca}{l['mes']}{marca} | {num(l['maturacao']*100, 0)}% | "
+              f"{br(l['recuperado'])} | {br(l['receita_fixa'])} | {br(l['variavel'])} | "
+              f"{br(l['custo'])} | {br(l['resultado'])} | {marca}{br(l['acumulado'])}{marca} |")
         A("")
+        if proj["meses_negativos"]:
+            n = proj["meses_negativos"]
+            A(f"> ⛔ **O contrato dá prejuízo {'no mês' if len(n) == 1 else 'nos meses'} "
+              f"{', '.join(str(x) for x in n)}** — a receita ainda está maturando e o "
+              f"acionamento já roda cheio. É caixa que alguém financia, e a bancada estática "
+              f"não mostrava isso: nela todo mês é o mês 12.")
+        if proj["linhas"]:
+            A(f"> O mês 1 fecha **{pct(proj['mes1_vs_regime'], 0)}** contra o regime "
+              f"({br(proj['linhas'][0]['resultado'])} × {br(proj['regime'])}).")
         if proj["payback"]:
             A(f"> O contrato devolve o setup no **mês {proj['payback']}**.")
         elif proj["setup"]:
@@ -1599,11 +1736,21 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
               f"em {br(proj['acumulado'])}. A unidade é dimensionada NO break-even, então ela "
               "não gera caixa para amortizar entrada nenhuma: ou o setup é cobrado do cliente, "
               "ou sai da margem de outro contrato.")
+        if proj["colchao_herdado"]:
+            A(f"> O colchão **herdado** ({br(proj['colchao_herdado'])}/mês) entra cheio desde o "
+              "mês 1 — é acordo de outra assessoria, já contratado, e não matura. Só o que "
+              f"**nós** recuperamos ({br(proj['nosso'])}/mês em regime) segue a curva.")
+        if not proj["variavel_ativa"]:
+            A("> ⚠️ Projeção **só com a receita fixa**. É a metade menor: com a variável na "
+              "meta, o contrato de referência sai de −7,6% para +21,2%.")
+        elif not proj["variavel_regime"]:
+            A("> ⚠️ **Variável zerada** — nenhuma faixa tem alíquota com recuperação. A "
+              "projeção mostra só o fixo, que é a parte que não paga a margem.")
         if not proj["rampa_informada"]:
             A("")
-            A("> ⚠️ **Sem rampa informada, o contrato roda cheio desde o mês 1.** Não temos "
-              "série de ramp-up nem de churn — informar uma rampa otimista aqui seria inventar "
-              "receita, então o default é o não-destrutivo.")
+            A("> ⚠️ A **maturação** da carteira já está na conta (medida na nossa operação). O "
+              "que continua fora é o ramp-up da *operação* e o churn — sem série histórica, e "
+              "quem tiver uma informa em `--rampa`, que multiplica por cima.")
     A("")
     S("Premissas assumidas — escrever na proposta")
     A("")
@@ -2162,6 +2309,12 @@ def main():
                     help="meses de projeção com payback do setup (ex.: 12)")
     ap.add_argument("--rampa", default="",
                     help="fatores da rampa por mês, ex.: '0,5;0,8;1' — PREMISSA, não medição")
+    ap.add_argument("--maturacao", default="",
+                    help="curva de maturação da carteira por mês, ex.: '0,42;0,52;0,60' — "
+                         "em branco usa a MEDIDA na Principia. O 1o ponto é o complemento "
+                         "do colchão: 41,6%% no mês 1 = 58,4%% de colchão em regime")
+    ap.add_argument("--sem-variavel-na-projecao", action="store_true",
+                    help="projeta só a receita fixa (o comportamento antigo)")
     ap.add_argument("--sem-escada", action="store_true",
                     help="omite a escada de régua (ela entra por default)")
     ap.add_argument("--voz-piso", type=float, default=VOZ["piso"] * 100,
@@ -2202,6 +2355,7 @@ def main():
                  pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                  compart_modelo=a.compart_modelo, captura=a.captura / 100,
                  colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
+                 maturacao=_serie(a.maturacao) or None,
                  produtos=a.produtos, entradas=_serie(a.entradas),
                  elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100))
     cen = None
@@ -2214,6 +2368,7 @@ def main():
                     pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                     compart_modelo=a.compart_modelo, captura=a.captura / 100,
                     colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
+                    maturacao=_serie(a.maturacao) or None,
                     produtos=a.produtos, entradas=_serie(a.entradas),
                     elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
                                email=a.elast_email / 100))
@@ -2227,6 +2382,7 @@ def main():
             pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
             compart_modelo=a.compart_modelo, captura=a.captura / 100,
             colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
+            maturacao=_serie(a.maturacao) or None,
             produtos=a.produtos, entradas=_serie(a.entradas),
             elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100),
             voz=dict(piso=a.voz_piso / 100, gamma=a.voz_gamma))
@@ -2265,7 +2421,11 @@ def main():
             rampa = [float(x.replace(",", ".")) for x in a.rampa.split(";") if x.strip()] \
                 if a.rampa else None
             proj = projecao(meses=a.projecao, rampa=rampa, **kb, faixas=faixas,
-                            preco=c["preco"], setup=a.setup, setup_meses=a.setup_meses)
+                            preco=c["preco"], setup=a.setup, setup_meses=a.setup_meses,
+                            colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
+                            maturacao=_serie(a.maturacao) or None,
+                            compart_modelo=a.compart_modelo, captura=a.captura / 100,
+                            variavel_ativa=not a.sem_variavel_na_projecao)
         md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen, escada=esc,
                       curva=curva, torn=torn, premio=prem, repac=rep, proj=proj)
         rotulo = "planilha"
