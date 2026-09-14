@@ -106,8 +106,9 @@ credor tiver número próprio, e diga na planilha que é premissa.
 2. **A banda de execução é o risco que fica do nosso lado.** Num contrato de valor fixo, régua
    realizada no teto e mailing com mais telefones por CPF podem virar o sinal da margem. A
    planilha imprime os três cenários com o **mesmo preço** — não três preços.
-3. **Use a linha "pela medição", não a "premissa do modelo".** A premissa de telecom fixo por
-   unidade erra nos dois sentidos, e o script diz de quanto e para que lado.
+3. **Telecom é coeficiente, não assinatura da unidade.** O fixo de R$ 1.500/unidade foi
+   aposentado em 14/09/2026 — a planilha traz uma linha de telecom só, `0,137 × tentativa
+   esperada`. Contrato assinado antes disso foi precificado pelo fixo; ao repactuar, refaça a conta.
 4. **Se o equilíbrio por unidade passar do preço**, o deal nasce negativo. Não maquie: reduza
    cadência, reduza régua, ou reprecifique.
 5. **Folga até a âncora de R$ 12.000** é o espaço que existe para margem, desconto e variação de

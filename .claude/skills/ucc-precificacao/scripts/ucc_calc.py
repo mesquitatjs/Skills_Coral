@@ -30,7 +30,11 @@ P = {
     "tam_ucc":        2_500,    # DECIDIDO — é o break-even
     "preco_ucc":      8_000.0,  # DECIDIDO
     "bot":            1_020.0,  # TABELA (custo real) por unidade
-    "telecom_fixo":   1_500.0,  # DECIDIDO por unidade — premissa do modelo atual
+    # "telecom_fixo" (R$ 1.500/unidade) foi APOSENTADO em 14/09/2026. Telecom não é
+    # assinatura da unidade: é proporcional à discagem (coef_telecom, MEDIDO nas quatro
+    # carteiras). O fixo equivalia a 4,38 tentativas/CPF/dia cobradas de toda a carteira,
+    # que não é régua de ninguém — cobrava a mais na carteira leve e escondia prejuízo na
+    # intensa. A comparação com ele saiu da tela e da planilha.
     "coef_telecom":   0.137,    # MEDIDO — R$/CPF/mês por tentativa/dia
     "wa":             0.45,     # TABELA por disparo
     "sms":            0.06,     # TABELA
@@ -307,7 +311,6 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         ("E-mail",                     cpfs * email * P["email"],             "Acionamento"),
         ("CRM — assento",              cpfs * P["crm_assento"],               "Acionamento"),
     ]
-    tel_fixo = u * P["telecom_fixo"]
     tel_med = (sum(l["telecom"] for l in lf) if lf
                else cpfs * P["coef_telecom"] * tent_esperada)
     if lf:   # com faixas, mensageria e CRM também saem linha a linha
@@ -317,7 +320,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
             if nome == "E-mail":    linhas[i] = (nome, sum(l["trabalhado"] * l["email"] for l in lf) * P["email"], nat)
 
     base = sum(v for _, v, _ in linhas)
-    custo_medido, custo_modelo = base + tel_med, base + tel_fixo
+    custo_medido = base + tel_med
 
     capacidade = sum(v for _, v, n in linhas if n == "Capacidade")
     for l in lf:
@@ -335,7 +338,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     liq = receita - tributo
     return dict(
         uccs=u, cpfs=cpfs, preco=preco, receita=receita, liquida=liq,
-        linhas=linhas, tel_fixo=tel_fixo, tel_med=tel_med,
+        linhas=linhas, tel_med=tel_med,
         setup_mes=setup_mes, transbordo=transbordo, capacidade=capacidade,
         faixas=lf, elast=elast,
         carteira=sum(l["carteira_trab"] for l in lf),
@@ -348,8 +351,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         variavel=sum(l["variavel"] for l in lf),
         tributo=tributo, trib_pct=(tributo / receita if receita else P["tributo"]),
         receita_base=receita_base, alvo=alvo,
-        custo_modelo=custo_modelo, custo_medido=custo_medido,
-        margem_modelo=(liq - custo_modelo) / receita if receita else 0.0,
+        custo_medido=custo_medido,
         margem_medido=(liq - custo_medido) / receita if receita else 0.0,
         equilibrio=preco_do_alvo(custo_medido, u, 0.0, receita_base),
         rateio_frac=max(P["rateio_piso"], cpfs * P["rateio_por_cpf"]),
@@ -629,22 +631,9 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
     for nome, val, nat in c["linhas"]:
         extra = f" <small>({c['rateio_frac']*100:.0f}%)</small>" if nome.startswith("Rateio") else ""
         A(f"| {nome}{extra} | {nat} | {br(val)} |")
-    A(f"| **Telecom — premissa do modelo** <small>fixo/unidade</small> | Capacidade | {br(c['tel_fixo'])} |")
-    A(f"| **Telecom — pela medição** <small>0,137 × {num(c['tent_esperada'], 2)}</small> "
+    A(f"| **Telecom** <small>0,137 × {num(c['tent_esperada'], 2)} tentativas</small> "
       f"| Acionamento | **{br(c['tel_med'])}** |")
-    A("")
-    A("| Cenário de custeio | Custo | Resultado | Margem |")
-    A("|---|--:|--:|--:|")
-    A(f"| Pela premissa do modelo | {br(c['custo_modelo'])} | {br(c['liquida']-c['custo_modelo'])} | {pct(c['margem_modelo'])} |")
-    A(f"| **Pela medição — use esta** | **{br(c['custo_medido'])}** | **{br(c['liquida']-c['custo_medido'])}** | **{pct(c['margem_medido'])}** |")
-    delta = c["tel_med"] - c["tel_fixo"]
-    if abs(delta) > 200:
-        senso = "SUBESTIMA" if delta > 0 else "superestima"
-        A("")
-        A(f"> ⚠️ A premissa de telecom fixo **{senso}** o custo em **{br(abs(delta))}/mês** "
-          f"({pct(abs(delta)/c['custo_medido'], 1).lstrip('+')} do custo). "
-          + ("Cotar pelo modelo antigo aqui é vender no prejuízo." if delta > 0
-             else "Há folga que a proposta pode usar."))
+    A(f"| **Custo total** | | **{br(c['custo_medido'])}** |")
     # ── merecimento por faixa ────────────────────────────────────────────────
     if c["faixas"]:
         A("")
@@ -981,7 +970,7 @@ def _conferir_proposta(texto, c):
     # exatamente o preço de uma unidade, porque 5 × 0,20 = 1.
     permitidos = {br(c["preco"]), br(c["preco"] * c["uccs"])}
     proibidos_num = {
-        "o custo medido": c["custo_medido"], "o custo pelo modelo": c["custo_modelo"],
+        "o custo medido": c["custo_medido"],
         "a capacidade": c["capacidade"], "o equilíbrio": c["equilibrio"],
         "o tributo": c["tributo"], "o telecom medido": c["tel_med"],
         "o resultado": c["liquida"] - c["custo_medido"],
