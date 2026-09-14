@@ -105,6 +105,13 @@ def carregar_faixas(caminho, padrao):
                                  if f.get("carteira_entrada") is not None else None),
             "meta": float(f.get("meta", 0)) / 100, "aliq": float(f.get("aliq", 0)) / 100,
             "base_meta": str(f.get("base_meta", "trabalhado")).strip().lower(),
+            # item 5: faixa marcada como FORA do escopo continua na tela com os números que
+            # teria, mas não dimensiona, não custa e não recupera
+            "fora": bool(f.get("fora", False)),
+            # item 14: política do credor. Efeito real e NÃO medido (promessa parcelada quebra
+            # mais, mas temos um ponto e não uma curva) → premissa escrita, fora da conta
+            "parcelas": float(f.get("parcelas", 0) or 0),
+            "entrada_pct": float(f.get("entrada_pct", 0) or 0),
             # item 9 do discovery: saldo de parcelas a vencer de acordos já firmados
             "colchao": float(f.get("colchao", 0) or 0),
             # item 13 do discovery: desconto máximo no principal aceito na faixa
@@ -257,12 +264,13 @@ def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None, cenario=No
 # uma planilha sem ficha.
 FICHA_CHAVES = ("cpfs", "faixas", "entrada_mes", "base_meta", "carteira_entrada",
                 "regua", "telefones", "cadencia", "carteira_faixa", "meta", "aliq",
-                "ancora", "transbordo", "compartilhamento", "desconto", "colchao")
+                "ancora", "transbordo", "compartilhamento", "desconto", "colchao",
+                "escopo", "serie", "parcelamento", "produtos")
 
 
 def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbordo,
            entrada_sem_valor, compart_modelo="exclusivo", captura=1.0,
-           colchao_ativo=False):
+           colchao_ativo=False, lf_fora=(), serie_stat=None, produtos=""):
     aging = bool(lf)
     ent = sum(l["entrada_mes"] for l in lf)
     na = lambda cond, v: v if cond else "na"
@@ -293,14 +301,27 @@ def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbord
         # FORA da conta, que é o não-destrutivo — mas a ficha não deixa passar como resolvido
         "colchao": na(aging, "assumido" if not any(l["colchao"] > 0 for l in lf)
                       else "ok" if colchao_ativo else "falta"),
+        # escopo é DECISÃO: sem faixa marcada, a cotação cobre a carteira inteira
+        "escopo": na(aging, "ok" if lf_fora else "assumido"),
+        "serie": "ok" if serie_stat and serie_stat["n"] >= 3 else "assumido",
+        "parcelamento": na(aging, "ok" if any(l["parcelas"] > 0 for l in lf) else "assumido"),
+        "produtos": "ok" if produtos.strip() else "assumido",
     }
+
+
+def _serie(txt):
+    """Lê a série de entradas do CLI — vírgula ou ponto e vírgula, vazio vira nada."""
+    if not txt:
+        return None
+    return [float(x.strip().replace(".", "").replace(",", "."))
+            for x in txt.replace(";", ",").split(",") if x.strip()]
 
 
 def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=None,
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
              faixas=None, elast=None, ancora=None, cenario=None,
              compart_modelo="exclusivo", captura=1.0,
-             colchao_meses=0, colchao_efic=0.0):
+             colchao_meses=0, colchao_efic=0.0, produtos="", entradas=None):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
     # item 7 do discovery. Em mar aberto discamos a base INTEIRA (custo integral) e a
@@ -321,8 +342,25 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     if colchao_meses < 0 or not 0 <= colchao_efic <= 1:
         raise SystemExit(f"⛔ colchão inválido (meses={colchao_meses}, efic={colchao_efic}).")
     colchao_ativo = colchao_meses > 0 and colchao_efic > 0
+    # item 6: a conta precisa de UM número por mês, o discovery pede SEIS. A média vira a
+    # entrada; a série entrega o que a média esconde — dispersão e tendência.
+    serie = [float(x) for x in (entradas or []) if x is not None]
+    serie_stat = None
+    if serie:
+        meia = len(serie) // 2
+        ini = sum(serie[:meia]) / meia if meia else 0.0
+        fim = sum(serie[len(serie) - meia:]) / meia if meia else 0.0
+        serie_stat = dict(
+            n=len(serie), media=sum(serie) / len(serie), minimo=min(serie), maximo=max(serie),
+            # dispersão sobre a média: é o que diz se dimensionar pela média estoura no pico
+            disp=(max(serie) - min(serie)) / (sum(serie) / len(serie)) if sum(serie) else 0.0,
+            tendencia=(fim / ini - 1) if ini else 0.0)
+
+    todas = [_normalizar_faixa(f) for f in (faixas or [])]
     if faixas:
-        faixas = [_normalizar_faixa(f) for f in faixas]
+        # ⚠️ a conferência de coerência do cadastro usa TODAS as faixas (escopo é decisão,
+        # divergência de soma é erro de digitação); a CONTA usa só as de dentro
+        faixas = [f for f in todas if not f["fora"]]
         # o TRABALHADO (estoque + entrada do mês) é a verdade da carteira, não a foto
         cpfs = sum(f["trabalhado"] for f in faixas)
     u = ceil(cpfs / P["tam_ucc"])
@@ -360,6 +398,17 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
             recuperado=colchao_mes + acionavel * (1 - perda_frac),
             economia=(cheia["telecom"] + cheia["msg"] + cheia["crm"]) - acion,
         ))
+    # o que as faixas FORA do escopo carregam — para o antes-e-depois aparecer na mesma tela
+    # ⚠️ só o ACIONAMENTO: capacidade é degrau do contrato inteiro, e dizer quanto a faixa
+    # "custaria" em capacidade exigiria recontar as unidades — quem quer o número exato
+    # desmarca a faixa e lê a conta inteira
+    lf_fora = []
+    for f in (x for x in todas if x["fora"]):
+        af = _acionar(f["trabalhado"], f["regua"], telefones, f["wa"], f["sms"], f["email"],
+                      realizacao, cenario)
+        lf_fora.append(dict(
+            f, recuperado_potencial=f["carteira_meta"] * f["meta"] * f["fator_desconto"],
+            acionamento_potencial=af["telecom"] + af["msg"] + af["crm"]))
     linhas = [
         ("Bot de voz",                 u * P["bot"],                          "Capacidade"),
         ("Rateio do compartilhado",    max(P["rateio_piso"], cpfs * P["rateio_por_cpf"]) * P["compart"], "Capacidade"),
@@ -417,6 +466,17 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         colchao_mes=sum(l["colchao_mes"] for l in lf),
         colchao_excede=[l["nome"] for l in lf if l["colchao_excede"]],
         colchao_meses=colchao_meses, colchao_efic=colchao_efic, colchao_ativo=colchao_ativo,
+        faixas_fora=lf_fora, produtos=(produtos or "").strip(), serie=serie, serie_stat=serie_stat,
+        cpfs_fora=sum(f["trabalhado"] for f in lf_fora),
+        carteira_fora=sum(f["carteira_trab"] for f in lf_fora),
+        recuperado_fora=sum(f["recuperado_potencial"] for f in lf_fora),
+        acionamento_fora=sum(f["acionamento_potencial"] for f in lf_fora),
+        # a soma da série × o que foi digitado por faixa: divergência grande é entrada
+        # inconsistente, não refinamento
+        entrada_divergente=(serie_stat is not None
+                            and sum(l["entrada_mes"] for l in lf) > 0
+                            and abs(sum(l["entrada_mes"] for l in lf) / serie_stat["media"] - 1) > 0.20
+                            if serie_stat and serie_stat["media"] else False),
         compart_modelo=compart_modelo, captura=captura,
         rec_base_total=sum(l["rec_base"] for l in lf),
         perda_total=sum(l["perda"] for l in lf),
@@ -439,7 +499,8 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         ficha=_ficha(cpfs, regua, telefones, wa, sms, email, lf,
                      bool(ancora), transbordo,
                      [l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
-                     compart_modelo, captura, colchao_ativo),
+                     compart_modelo, captura, colchao_ativo, lf_fora, serie_stat,
+                     produtos or ""),
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
 
@@ -725,6 +786,14 @@ FICHA_LINHAS = (
      "a alíquota incide sobre o negociado, não sobre a face"),
     ("colchao", "Colchão de acordos — saldo, prazo e eficiência",
      "parcela de acordo já firmado chega sem esforço novo e infla a meta"),
+    ("escopo", "Faixas elegíveis para terceirização",
+     "sem marcação, a cotação cobre a carteira inteira"),
+    ("serie", "Entradas mensais dos últimos 6 meses",
+     "a média esconde o pico, e é no pico que a unidade estoura"),
+    ("parcelamento", "Parcelamento máximo por faixa",
+     "promessa parcelada quebra mais; premissa escrita, fora da conta"),
+    ("produtos", "Produtos cobertos por esta cotação",
+     "produto com régua ou cadência própria é contrato separado"),
 )
 
 
@@ -947,6 +1016,49 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "CPF** (o discador capeia por linha) e a cadência cheia, sem o corte por faixa. O "
           "**otimista** mexe só na régua, 10% abaixo da medida — o que dá errado em execução "
           "não tem espelho do lado que dá certo, e uma banda simétrica seria uma banda falsa.")
+
+    if c["faixas_fora"]:
+        A("")
+        S("Escopo — o que ficou de fora")
+        A("")
+        A(f"**{num(len(c['faixas_fora']))} de "
+          f"{num(len(c['faixas_fora']) + len(c['faixas']))} faixas** estão marcadas como fora da "
+          f"terceirização: **{num(c['cpfs_fora'])} CPFs** e **{br(c['carteira_fora'])}** de "
+          "carteira que a cotação não cobre. Ficam aqui com o que carregariam, porque a decisão "
+          "de escopo precisa do antes-e-depois.")
+        A("")
+        A("| Faixa fora | CPFs | Carteira | Recuperaria | Acionamento que custaria |")
+        A("|---|--:|--:|--:|--:|")
+        for l in c["faixas_fora"]:
+            A(f"| {l['nome']} | {num(l['trabalhado'])} | {br(l['carteira_trab'])} | "
+              f"{br(l['recuperado_potencial'])} | {br(l['acionamento_potencial'])} |")
+        A(f"| **Total fora** | **{num(c['cpfs_fora'])}** | **{br(c['carteira_fora'])}** | "
+          f"**{br(c['recuperado_fora'])}** | **{br(c['acionamento_fora'])}** |")
+        A("")
+        A("> ⚠️ A coluna de acionamento é **só acionamento**: capacidade é degrau do contrato "
+          "inteiro, e recontar unidades por faixa daria número errado. Para o custo exato de "
+          "incluir a faixa, tire a marcação e leia a conta inteira.")
+
+    if c["serie_stat"]:
+        e = c["serie_stat"]
+        A("")
+        S("Entradas mensais — o que a média esconde")
+        A("")
+        A(f"Série de **{num(e['n'])} meses**: média **{num(e['media'])} CPFs/mês**, mínimo "
+          f"{num(e['minimo'])}, máximo **{num(e['maximo'])}**. Dispersão de "
+          f"**{pct(e['disp'], 0).lstrip('+')}** sobre a média; tendência "
+          f"**{pct(e['tendencia'], 0)}** entre a primeira e a segunda metade.")
+        if e["disp"] > 0.30:
+            A("")
+            A(f"> ⚠️ **Dimensionar pela média subdimensiona no pico.** A entrada vai a "
+              f"{num(e['maximo'])} CPFs num mês da série — **{pct(e['maximo']/e['media'] - 1, 0)}** "
+              "acima da média que a conta usa. A unidade aguenta a média; o mês de pico é risco "
+              "que precisa estar escrito.")
+        if c["entrada_divergente"]:
+            A("")
+            A(f"> ⛔ **A entrada digitada por faixa ({num(c['entrada_mes'])}/mês) diverge da média "
+              f"da série ({num(e['media'])}/mês)** em mais de 20%. Uma das duas está errada — "
+              "entrada inconsistente não é refinamento.")
 
     tem_colchao = any(l["colchao"] > 0 for l in c["faixas"])
     if (c.get("compart_modelo", "exclusivo") != "exclusivo"
@@ -1624,6 +1736,10 @@ def main():
                     help="como a carteira é repartida entre assessorias (default %(default)s)")
     ap.add_argument("--captura", type=float, default=100.0,
                     help="%% da recuperação que esperamos capturar; só vale fora do exclusivo")
+    ap.add_argument("--produtos", default="",
+                    help="produtos cobertos por esta cotação (item 3 do discovery)")
+    ap.add_argument("--entradas", default="",
+                    help="entradas mensais dos últimos 6 meses, separadas por vírgula (item 6)")
     ap.add_argument("--colchao-meses", type=float, default=0,
                     help="prazo médio restante das parcelas a vencer (item 9 do discovery)")
     ap.add_argument("--colchao-efic", type=float, default=0,
@@ -1669,6 +1785,7 @@ def main():
                  pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                  compart_modelo=a.compart_modelo, captura=a.captura / 100,
                  colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
+                 produtos=a.produtos, entradas=_serie(a.entradas),
                  elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100))
     cen = None
     if not a.sem_banda:
@@ -1680,6 +1797,7 @@ def main():
                     pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                     compart_modelo=a.compart_modelo, captura=a.captura / 100,
                     colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
+                    produtos=a.produtos, entradas=_serie(a.entradas),
                     elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
                                email=a.elast_email / 100))
     esc = None
@@ -1692,6 +1810,7 @@ def main():
             pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
             compart_modelo=a.compart_modelo, captura=a.captura / 100,
             colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
+            produtos=a.produtos, entradas=_serie(a.entradas),
             elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100),
             voz=dict(piso=a.voz_piso / 100, gamma=a.voz_gamma))
 

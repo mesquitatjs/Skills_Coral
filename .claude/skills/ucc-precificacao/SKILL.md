@@ -55,6 +55,9 @@ entra por default) · `--voz-piso 44.4 --voz-gamma 1.0` (as duas premissas da re
 fração). O **desconto no principal** entra por faixa no JSON (`desconto` em % e `meta_base_valor`
 = `liquida` | `face`). O **colchão de acordos** entra com `colchao` em R$ por faixa no JSON +
 `--colchao-meses` e `--colchao-efic` — sem as duas últimas o saldo fica declarado e **fora** da conta.
+**Escopo por faixa**: `"fora": true` no JSON tira a faixa do dimensionamento, do custo e da
+recuperação, e a planilha lista o que ela carregaria. **Série de entradas**: `--entradas
+"2600,2900,3100,…"`. **Declaração**: `--produtos` e `parcelas`/`entrada_pct` por faixa.
 
 **Deriva o preço do custo em vez de fixá-lo** com `--alvo 20` (margem alvo em %). Com `--alvo 0`
 sai o equilíbrio exato. Cada carteira tem o seu preço, porque cada uma custa diferente.
@@ -141,14 +144,23 @@ credor tiver número próprio, e diga na planilha que é premissa.
    a ser sobre a recuperação **NOVA**. O merecimento ganha a coluna `R$ por R$ 1 NOVO` — a leitura
    de esforço — sem trocar a do credor. ⚠️ Peça a eficiência **em R$**, não por contagem: na nossa
    operação o cumprimento é 17,6% em R$ contra 31,8% por contagem.
-11. **Discar mais e discar menos têm dono diferente.** A escada de régua move as duas pontas —
+11. **Escopo por faixa se marca, não se apaga.** Tirar a faixa do arquivo tira junto a
+   comparação, que é o que a decisão precisa. Com `"fora": true` ela sai da conta e continua na
+   planilha com o que carregaria — na Cayena, marcar as cinco faixas acima de 60 dias leva a
+   cotação de 2 unidades a **1**, de R$ 15.791 a **R$ 4.237** de custo, com a **mesma
+   recuperação**. ⚠️ O custo listado da faixa fora é **só acionamento**: capacidade é degrau do
+   contrato inteiro.
+12. **A série de entradas é o que a média esconde.** A conta usa a média; a série diz o pico. Com
+   dispersão acima de 30%, dimensionar pela média subdimensiona no mês cheio — e a planilha
+   escreve isso. A série também confere contra a entrada digitada por faixa.
+13. **Discar mais e discar menos têm dono diferente.** A escada de régua move as duas pontas —
    custo e recuperação — e imprime o Δ para o credor e o Δ para a Coral no mesmo degrau. Com o
    variável inativo ou cadastrado só em faixas que recuperam zero, subir a régua é ganho inteiro
    do credor e custo inteiro nosso; é o conflito de incentivo do corte de cadência, com o sinal
    trocado. ⚠️ A resposta da recuperação à discagem é **transplantada** da nossa operação de voz
    (piso espontâneo 44,4%, retorno proporcional até 10 tentativas) para a recuperação observada na
    operação do credor — é a premissa de maior alavanca da seção, e vai escrita.
-12. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
+14. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
    o adicional de IRPJ entra na conta e a carga efetiva vai de 16,33% para até 19,53%. A planilha
    imprime a alíquota efetiva do contrato — confira se ela bate com a faixa que você esperava.
 
