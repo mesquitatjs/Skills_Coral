@@ -67,6 +67,51 @@ def realizacao_estimada(regua):
     return REALIZACAO[lo] + t * (REALIZACAO[hi] - REALIZACAO[lo])
 
 
+# ── bot × canal: o de-para que a UCC nunca teve (parecer 14/09, item `botcanal`) ──
+# A UCC conta BOTS — 2.500 CPFs por unidade, em QUALQUER régua. A operação conta CANAIS,
+# e a conta é outra: `canais = régua × base ÷ (throughput por canal-hora × horas)`. Um
+# canal cobre 3.461 CPFs a régua 1 e 346 a régua 10, então o mesmo "2.500" vendido pede
+# 1,4 canal numa carteira leve e 7,2 numa intensa — 5× de amplitude dentro da mesma
+# unidade. Enquanto as duas não conversam, o 2.500 é número comercial sem contrapartida.
+THR_CANAL_H = 273.0        # MEDIDO — média das 4 carteiras (Ouro 270 · Bronze 274 ·
+                           # PPay 285 · FIDC 264), recalibrado em 10/09 (§12)
+JANELA_H = 12 + 40 / 60    # MEDIDO — janela operacional de dia útil
+
+
+def canais_necessarios(cpfs, regua, thr=None, horas=None):
+    """Canais que a operação liga para entregar esta régua nesta base.
+
+    Devolve também quantos canais UMA unidade vendida exige, que é a leitura que falta
+    na hora de dimensionar: a unidade é fixa em CPFs e o canal é função da régua.
+    """
+    thr = THR_CANAL_H if thr is None else float(thr)
+    horas = JANELA_H if horas is None else float(horas)
+    if not cpfs or not regua or thr <= 0 or horas <= 0:
+        return dict(canais=0.0, cpfs_por_canal=0.0, canais_por_ucc=0.0)
+    cpfs_canal = thr * horas / regua
+    return dict(canais=cpfs * regua / (thr * horas),
+                cpfs_por_canal=cpfs_canal,
+                canais_por_ucc=P["tam_ucc"] / cpfs_canal)
+
+
+def regua_fora_da_medida(regua):
+    """A régua cotada está fora dos dois pontos que medimos?
+
+    `realizacao_estimada` conhece 93% na régua 2 e 68% na régua 10 e traça uma reta entre
+    eles. Régua no meio é interpolação (defensável); fora do intervalo é EXTRAPOLAÇÃO, e o
+    γ = 1,00 da escada de voz também só foi medido até 10 tentativas. Quem cota precisa
+    ver a diferença — ela não aparece em número nenhum da tela.
+    """
+    r = float(regua or 0)
+    if r <= 0:
+        return None
+    if r < 2:
+        return dict(lado="abaixo", limite=2.0, regua=r)
+    if r > 10:
+        return dict(lado="acima", limite=10.0, regua=r)
+    return None
+
+
 # item 7 do discovery — como a carteira é repartida entre assessorias
 COMPART_MODELOS = ("exclusivo", "aberto", "rotativo")
 
@@ -491,7 +536,10 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         # o que o credor paga HOJE é a âncora que vale; sem isso, a genérica
         ancora=(ancora if ancora else P["ancora"]), ancora_propria=bool(ancora),
         **_restricao(preco, u, (ancora if ancora else P["ancora"]),
-                     sum(l["recuperado"] for l in lf)),
+                     sum(l["recuperado"] for l in lf),
+                     sum(l["recuperado_novo"] for l in lf)),
+        canais=canais_necessarios(cpfs, tent_esperada),
+        regua_extrapolada=regua_fora_da_medida(regua),
         tent_contratada=tent_contratada, tent_esperada=tent_esperada, realizacao=r,
         # entradas ecoadas: a proposta escreve as premissas, e elas têm de vir do mesmo
         # objeto que gerou o preço — reescrevê-las à mão é como a premissa e a conta divergem
@@ -737,7 +785,179 @@ def banda(preco_base=None, **kw):
             for chave, rot, modo, dtel, cheia in CENARIOS]
 
 
-def _restricao(preco, u, ancora, recuperado):
+def curva_volume(tamanhos=None, **kw):
+    """Preço por unidade e por CPF a margem alvo CONSTANTE, ao longo do volume.
+
+    É a curva que responde "e se forem 40 mil CPFs?" — a pergunta que aparece em toda
+    negociação e que era respondida no olho.
+
+    ⛔ **O que ela mostra é que não há ganho de escala.** Acima de 3.000 CPFs o rateio do
+    compartilhado é R$ 0,344 por CPF, CONSTANTE, porque `max(3%; 1% a cada 1.000)` cresce
+    junto com a base — ele não dilui. O único trecho com ganho real é abaixo de 3.000, onde
+    o piso de 3% é maior que o proporcional. Daí para cima o preço por CPF SOBE, porque o
+    degrau de IRPJ entra. Quem conceder desconto por volume está concedendo margem, não
+    repassando diluição.
+    """
+    tamanhos = tamanhos or (2_500, 5_000, 10_000, 20_000, 40_000, 60_000, 100_000)
+    k = dict(kw)
+    k.setdefault("alvo", 0.20)
+    k.pop("cpfs", None)
+    k.pop("preco", None)
+    linhas = []
+    for n in tamanhos:
+        c = calcular(cpfs=n, **k)
+        linhas.append(dict(cpfs=n, uccs=c["uccs"], custo=c["custo_medido"],
+                           preco=c["preco"], por_cpf=c["preco"] * c["uccs"] / n,
+                           rateio_frac=c["rateio_frac"],
+                           rateio_por_cpf=c["rateio_frac"] * P["compart"] / n,
+                           trib_pct=c["trib_pct"]))
+    ref = linhas[0]["por_cpf"] if linhas else 0
+    for l in linhas:
+        l["vs_menor"] = (l["por_cpf"] / ref - 1) if ref else 0.0
+    return linhas
+
+
+# alavancas do tornado: (rótulo, chave, valor alternativo, onde vive, procedência).
+# "P" = parâmetro nosso (custo de insumo); "kw" = entrada do credor nesta cotação.
+TORNADO = (
+    ("Preço do disparo de WhatsApp", "wa", 0.25, "P", "tabela"),
+    ("Cadência de WhatsApp por CPF/mês", "wa", 1.0, "kw", "decidido"),
+    ("Régua de tentativas/dia", "regua", 10.0, "kw", "decidido"),
+    ("Telefones por CPF", "telefones", 1.6, "kw", "medido"),
+    ("Coeficiente de telecom", "coef_telecom", 0.10, "P", "medido"),
+    ("Custo do bot de voz", "bot", 700.0, "P", "tabela"),
+    ("CRM — assento por CPF", "crm_assento", 0.08, "P", "tabela"),
+    ("Estrutura compartilhada", "compart", 25_000.0, "P", "tabela"),
+)
+
+
+def tornado(alavancas=None, **kw):
+    """Quanto cada parâmetro, SOZINHO, move a margem.
+
+    A banda move quatro alavancas ao mesmo tempo e responde "qual é o risco". Esta conta
+    responde outra coisa: **qual parâmetro merece atenção**. Foi ela que mostrou que as
+    quatro maiores alavancas de margem são todas de acionamento por CPF e que **nenhuma é
+    o preço da unidade** — e que a maior delas sob nosso controle é preço de tabela de
+    fornecedor que nunca conferimos contra fatura.
+    """
+    alavancas = alavancas or TORNADO
+    k = dict(kw)
+    k.pop("alvo", None)
+    k.setdefault("preco", P["preco_ucc"])
+    base = calcular(**k)["margem_medido"]
+    linhas = []
+    for rot, chave, para, onde, proc in alavancas:
+        if onde == "P":
+            de, P[chave] = P[chave], para
+            try:
+                m = calcular(**k)["margem_medido"]
+            finally:
+                P[chave] = de
+        else:
+            de = k.get(chave, 1.0)
+            m = calcular(**{**k, chave: para})["margem_medido"]
+        linhas.append(dict(rotulo=rot, de=de, para=para, margem=m, delta=m - base,
+                           onde=onde, procedencia=proc))
+    linhas.sort(key=lambda l: -abs(l["delta"]))
+    return dict(base=base, linhas=linhas)
+
+
+def repactuacao(uccs_assinadas, preco_assinado, **kw):
+    """O contrato como ASSINADO ao lado do mesmo escopo recotado com os parâmetros de hoje.
+
+    O contrato de referência roda as unidades 20% acima do tamanho porque foi assinado sob
+    a régua antiga de 3.000 CPFs, e a decisão foi mantê-lo como está. Decisão certa — mas
+    sem esta leitura a renovação chega sem número pronto, e "quanto custa manter" nunca foi
+    calculado. Aqui as duas colunas saem da MESMA carteira: muda só o dimensionamento.
+    """
+    u_ass = int(uccs_assinadas)
+    if u_ass <= 0:
+        raise SystemExit("⛔ repactuação precisa do nº de unidades assinadas.")
+    k = dict(kw)
+    k.pop("alvo", None)
+    k["preco"] = preco_assinado
+    hoje = calcular(**k)                       # mesmo custo, dimensionamento de hoje
+    custo = hoje["custo_medido"]
+    rec_ass = u_ass * preco_assinado
+    trib_ass = tributo_de(rec_ass, k.get("receita_base", 0.0) or 0.0)
+    res_ass = rec_ass - trib_ass - custo
+    return dict(
+        assinado=dict(uccs=u_ass, preco=preco_assinado, receita=rec_ass,
+                      tributo=trib_ass, custo=custo, resultado=res_ass,
+                      margem=res_ass / rec_ass if rec_ass else 0.0,
+                      cpfs_por_ucc=hoje["cpfs"] / u_ass),
+        hoje=dict(uccs=hoje["uccs"], preco=hoje["preco"], receita=hoje["receita"],
+                  tributo=hoje["tributo"], custo=custo, resultado=hoje["liquida"] - custo,
+                  margem=hoje["margem_medido"], cpfs_por_ucc=P["tam_ucc"]),
+        delta_receita=hoje["receita"] - rec_ass,
+        delta_margem=hoje["margem_medido"] - (res_ass / rec_ass if rec_ass else 0.0),
+        excesso_por_unidade=(hoje["cpfs"] / u_ass) / P["tam_ucc"] - 1 if u_ass else 0.0,
+        custo_de_manter=(hoje["liquida"] - custo) - res_ass)
+
+
+def projecao(meses=12, rampa=None, **kw):
+    """Os 12 meses do contrato, com o payback do setup.
+
+    Tudo na bancada é R$ por mês estático: o mês 1 de uma unidade nova é tratado como o
+    mês 12. Aqui o setup sai do regime (ele é um desembolso único, não uma mensalidade) e
+    aparece o mês em que o contrato devolve o que custou para entrar.
+
+    ⛔ **A rampa é PREMISSA, não medição.** Não temos série de ramp-up nem de churn — por
+    isso ela entra por parâmetro e, em branco, o contrato roda cheio desde o mês 1, que é
+    o não-destrutivo. Informar uma rampa otimista aqui é inventar receita.
+    """
+    k = dict(kw)
+    setup = float(k.pop("setup", 0.0) or 0.0)
+    k["setup"] = 0.0                            # sai do regime, entra como desembolso
+    c = calcular(**k)
+    regime = c["liquida"] - c["custo_medido"]
+    rampa = list(rampa) if rampa else []
+    linhas, acum = [], -setup
+    for m in range(1, int(meses) + 1):
+        f = float(rampa[m - 1]) if m <= len(rampa) else 1.0
+        res = regime * f
+        acum += res
+        linhas.append(dict(mes=m, fator=f, resultado=res, acumulado=acum,
+                           desembolso=setup if m == 1 else 0.0))
+    pay = next((l["mes"] for l in linhas if l["acumulado"] >= 0), None)
+    return dict(setup=setup, regime=regime, linhas=linhas, payback=pay,
+                acumulado=linhas[-1]["acumulado"] if linhas else -setup,
+                rampa_informada=bool(rampa))
+
+
+def premio_risco(**kw):
+    """Quanto custa cotar no cenário BASE quando o desvio de execução é risco nosso.
+
+    A banda já existia e mostrava três margens. O que faltava era a consequência: num
+    contrato de **valor fixo** o desvio não é do credor, é nosso — e o cenário pessimista
+    não é exótico (a régua contratada realizada cheia, meio telefone a mais por CPF, a
+    cadência sem corte). Cotar no meio é aceitar a distância inteira.
+
+    Devolve o preço que a margem alvo pede sobre o custo da BASE e sobre o custo do
+    PESSIMISTA. A diferença é o prêmio — informá-lo ou absorvê-lo é decisão comercial,
+    mas ela passa a ser tomada com o número na mesa.
+    """
+    k = dict(kw)
+    alvo = k.pop("alvo", None)
+    alvo = 0.20 if alvo is None else alvo
+    k.pop("preco", None)
+    base = calcular(alvo=alvo, **k)
+    cen = {b["chave"]: b for b in banda(preco_base=base["preco"], **k, alvo=None)}
+    pes = cen["pessimista"]
+    # mesmo alvo, custo do pessimista: é o preço que aguentaria o mau cenário
+    preco_pes = preco_do_alvo(pes["custo_medido"], base["uccs"], alvo,
+                              k.get("receita_base", 0.0) or 0.0)
+    return dict(alvo=alvo, uccs=base["uccs"],
+                preco_base=base["preco"], custo_base=base["custo_medido"],
+                preco_pessimista=preco_pes, custo_pessimista=pes["custo_medido"],
+                premio=preco_pes - base["preco"],
+                premio_pct=(preco_pes / base["preco"] - 1) if base["preco"] else 0.0,
+                margem_base=base["margem_medido"],
+                margem_pessimista_no_preco_base=pes["margem_medido"],
+                pontos=base["margem_medido"] - pes["margem_medido"])
+
+
+def _restricao(preco, u, ancora, recuperado, recuperado_novo=None):
     """Qual das três restrições está MORDENDO — e por quanto.
 
     As três não são do mesmo tipo, e confundi-las é o erro comum:
@@ -751,13 +971,26 @@ def _restricao(preco, u, ancora, recuperado):
     de zero, porque "não sabemos" e "não fura" são coisas diferentes.
     """
     teto_r = (P["teto_por_real"] * recuperado / u) if (recuperado > 0 and u) else None
+    # ── a MESMA conta sobre a recuperação NOVA (parecer 14/09, item `tetonovo`) ──
+    # O teto de R$ 0,30 é leitura do CREDOR: ele olha tudo que entrou, colchão incluído.
+    # Só que o colchão é acordo de outra assessoria, e uma carteira com colchão grande
+    # passa no teto por mérito alheio. O merecimento já ganhou a coluna por R$ 1 NOVO em
+    # 14/09; a restrição não tinha ganhado. As duas convivem de propósito: a do credor
+    # fecha a negociação, a nossa diz se o negócio é bom.
+    rn = recuperado if recuperado_novo is None else recuperado_novo
+    teto_novo = (P["teto_por_real"] * rn / u) if (rn > 0 and u) else None
+    extra = dict(teto_por_real_novo=teto_novo,
+                 folga_por_real_novo=(teto_novo - preco) if teto_novo else None,
+                 colchao_segura_o_teto=bool(teto_r and teto_novo and preco <= teto_r
+                                            and preco > teto_novo))
     tetos = [("ancora", ancora)] + ([("teto_por_real", teto_r)] if teto_r else [])
     furados = [(k, v) for k, v in tetos if preco > v]
     if furados:
         k, v = min(furados, key=lambda x: x[1])
-        return dict(restricao=k, restricao_teto=v, restricao_folga=v - preco)
+        return dict(restricao=k, restricao_teto=v, restricao_folga=v - preco, **extra)
     menor = min(v for _, v in tetos)
-    return dict(restricao="margem_alvo", restricao_teto=menor, restricao_folga=menor - preco)
+    return dict(restricao="margem_alvo", restricao_teto=menor,
+                restricao_folga=menor - preco, **extra)
 
 
 FICHA_LINHAS = (
@@ -798,7 +1031,7 @@ FICHA_LINHAS = (
 
 
 def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=None,
-             escada=None):
+             escada=None, curva=None, torn=None, premio=None, repac=None, proj=None):
     L = []
     A = L.append
     sec = iter(range(1, 20))
@@ -823,6 +1056,24 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
     A("")
     A(f"- **{c['uccs']} UCC(s)** — `teto({num(c['cpfs'])} ÷ {num(P['tam_ucc'])})`")
     A(f"- Ocupação da última unidade: **{c['ocupacao']*100:.0f}%** da capacidade vendida")
+    ca = c["canais"]
+    if ca["canais"]:
+        A(f"- **Canais que a operação liga: {num(ca['canais'], 1)}** — "
+          f"`{num(c['tent_esperada'], 2)} × {num(c['cpfs'])} ÷ ({num(THR_CANAL_H)} × "
+          f"{num(JANELA_H, 2)}h)`. Um canal cobre **{num(ca['cpfs_por_canal'])} CPFs** nesta "
+          f"régua, então **uma unidade vendida exige {num(ca['canais_por_ucc'], 1)} canal(is)**.")
+        A(f"  > ⛔ A UCC conta **bots** (2.500 CPFs em qualquer régua); a operação conta "
+          f"**canais**, e a conta é outra. A régua 2 pede 1,4 canal por unidade e a régua 10 "
+          f"pede 7,2 — **5× de amplitude dentro do mesmo tamanho vendido**. Enquanto o de-para "
+          f"não fecha, o 2.500 é número comercial sem contrapartida operacional.")
+    if c["regua_extrapolada"]:
+        e = c["regua_extrapolada"]
+        A("")
+        A(f"> ⚠️ **RÉGUA FORA DO QUE MEDIMOS.** A realização da régua conhece **dois** pontos "
+          f"(93% na régua 2 · 68% na régua 10) e traça uma reta entre eles. Esta cotação usa "
+          f"régua **{num(e['regua'], 2)}**, {e['lado']} do intervalo — o número é "
+          f"**extrapolação**, não interpolação. O γ = 1,00 da escada de voz também só foi "
+          f"medido até 10 tentativas. Escreva a premissa na proposta.")
     if c["alvo"] is not None:
         A(f"- **Preço calculado: {br(c['preco'])} por unidade** a {num(c['alvo']*100, 0)}% de "
           f"margem alvo · equilíbrio {br(c['equilibrio'])} · tabela {br(P['preco_ucc'])}")
@@ -1223,6 +1474,15 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "É o espaço que existe para desconto.")
     else:
         A(f"> **Restrição ativa: {rot_r}** — {br(c['restricao_folga'])} de folga.")
+    if c.get("teto_por_real_novo"):
+        A("")
+        A(f"> **O mesmo teto, medido pelo que depende de nós:** o R$ 0,30 por R$ 1 é leitura "
+          f"do CREDOR e inclui o colchão, que é acordo de outra assessoria. Sobre a "
+          f"recuperação **NOVA** o teto cai para **{br(c['teto_por_real_novo'])}** por unidade"
+          + (f" — e o preço de {br(c['preco'])} **passa dele**." if c["colchao_segura_o_teto"]
+             else f", com {br(c['folga_por_real_novo'])} de folga.")
+          + (" ⛔ **Uma carteira com colchão grande passa no teto do credor por mérito alheio.**"
+             if c["colchao_segura_o_teto"] else ""))
     if equil > c["preco"]:
         A("")
         A(f"> ⛔ **O equilíbrio ({br(equil)}) está ACIMA do preço ({br(c['preco'])}).** "
@@ -1245,6 +1505,105 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
         A("> Compare com o teto que o credor pratica (referência de mercado: **R$ 0,30**). "
           "A soma fixo + variável fica cara justamente quando a operação vai mal, que é quando o "
           "gatilho para baixo já está agindo.")
+    if premio:
+        A("")
+        S("Prêmio de risco — o que custa cotar na base")
+        A("")
+        A(f"O preço de **{br(premio['preco_base'])}** entrega {premio['alvo']*100:.0f}% no "
+          f"cenário BASE. No pessimista, o mesmo preço entrega "
+          f"**{premio['margem_pessimista_no_preco_base']*100:+.1f}%** — "
+          f"{num(premio['pontos']*100, 1)} pontos a menos.")
+        A("")
+        A("| | Custo | Preço a este alvo |")
+        A("|---|--:|--:|")
+        A(f"| Base (realização medida) | {br(premio['custo_base'])} | {br(premio['preco_base'])} |")
+        A(f"| Pessimista | {br(premio['custo_pessimista'])} | **{br(premio['preco_pessimista'])}** |")
+        A(f"| **Prêmio de risco** | | **{br(premio['premio'])}** "
+          f"({premio['premio_pct']*100:+.1f}%) |")
+        A("")
+        A("> Num contrato de **valor fixo** o desvio de execução é risco NOSSO, e o cenário "
+          "pessimista não é exótico: é a régua contratada realizada cheia, meio telefone a "
+          "mais por CPF e a cadência sem corte — o que acontece quando o credor usa o que "
+          "contratou. Cotar na base é absorver a distância inteira. Num **híbrido** o prêmio "
+          "pode ser menor, porque a variável acompanha a execução.")
+    if curva:
+        A("")
+        S("Preço por volume — e por que não há desconto de escala")
+        A("")
+        A("| CPFs | UCCs | Custo | Preço/unidade | Preço/CPF | Rateio/CPF |")
+        A("|--:|--:|--:|--:|--:|--:|")
+        for l in curva:
+            A(f"| {num(l['cpfs'])} | {l['uccs']} | {br(l['custo'])} | {br(l['preco'])} | "
+              f"R$ {num(l['por_cpf'], 2)} | R$ {num(l['rateio_por_cpf'], 3)} |")
+        A("")
+        A("> ⛔ **O rateio do compartilhado NÃO dilui.** Acima de 3.000 CPFs ele é "
+          "**R$ 0,344 por CPF, constante**, porque `max(3%; 1% a cada 1.000 CPFs)` cresce na "
+          "mesma proporção da base. O único trecho com ganho real é abaixo de 3.000, onde o "
+          "piso de 3% é maior que o proporcional; daí para cima o preço por CPF **sobe**, "
+          "porque o degrau de IRPJ entra. Desconto por volume concedido aqui é margem "
+          "entregue, não diluição repassada.")
+    if torn:
+        A("")
+        S("O que mais move a margem")
+        A("")
+        A(f"Margem de partida: **{torn['base']*100:+.1f}%**. Cada linha move **um** parâmetro.")
+        A("")
+        A("| Alavanca | De | Para | Margem | Δ | Procedência |")
+        A("|---|--:|--:|--:|--:|---|")
+        for l in torn["linhas"]:
+            A(f"| {l['rotulo']} | {num(l['de'], 2)} | {num(l['para'], 2)} | "
+              f"{l['margem']*100:+.1f}% | **{l['delta']*100:+.1f} p.p.** | `{l['procedencia']}` |")
+        A("")
+        A("> A banda move quatro alavancas juntas e responde *qual é o risco*; esta tabela "
+          "responde *qual parâmetro merece atenção*. ⛔ Repare que as maiores são todas de "
+          "acionamento por CPF e **nenhuma é o preço da unidade** — e a maior sob nosso "
+          "controle é `tabela` de fornecedor, nunca conferida contra fatura.")
+    if repac:
+        A("")
+        S("Repactuação — como assinado × recotado hoje")
+        A("")
+        A("| | Assinado | Recotado hoje |")
+        A("|---|--:|--:|")
+        a_, h_ = repac["assinado"], repac["hoje"]
+        A(f"| Unidades | {a_['uccs']} | {h_['uccs']} |")
+        A(f"| CPFs por unidade | {num(a_['cpfs_por_ucc'])} | {num(h_['cpfs_por_ucc'])} |")
+        A(f"| Preço por unidade | {br(a_['preco'])} | {br(h_['preco'])} |")
+        A(f"| Receita | {br(a_['receita'])} | {br(h_['receita'])} |")
+        A(f"| Custo | {br(a_['custo'])} | {br(h_['custo'])} |")
+        A(f"| Resultado | {br(a_['resultado'])} | {br(h_['resultado'])} |")
+        A(f"| **Margem** | **{a_['margem']*100:+.1f}%** | **{h_['margem']*100:+.1f}%** |")
+        A("")
+        A(f"> O contrato assinado roda as unidades **{repac['excesso_por_unidade']*100:+.0f}%** "
+          f"acima do tamanho de hoje, e **manter como está custa "
+          f"{br(repac['custo_de_manter'])}/mês** contra o mesmo escopo redimensionado. "
+          "Manter acordo em vigor pode ser a decisão certa — o que não pode é a renovação "
+          "chegar sem este número pronto.")
+    if proj:
+        A("")
+        S("Os 12 meses — e o payback do setup")
+        A("")
+        A(f"Regime: **{br(proj['regime'])}/mês**. Setup: **{br(proj['setup'])}**, desembolso "
+          f"único no mês 1.")
+        A("")
+        A("| Mês | Fator | Resultado | Acumulado |")
+        A("|--:|--:|--:|--:|")
+        for l in proj["linhas"]:
+            marca = "**" if l["mes"] == proj["payback"] else ""
+            A(f"| {marca}{l['mes']}{marca} | {num(l['fator']*100, 0)}% | {br(l['resultado'])} | "
+              f"{marca}{br(l['acumulado'])}{marca} |")
+        A("")
+        if proj["payback"]:
+            A(f"> O contrato devolve o setup no **mês {proj['payback']}**.")
+        elif proj["setup"]:
+            A(f"> ⛔ **O setup não se paga em {len(proj['linhas'])} meses** — o acumulado fecha "
+              f"em {br(proj['acumulado'])}. A unidade é dimensionada NO break-even, então ela "
+              "não gera caixa para amortizar entrada nenhuma: ou o setup é cobrado do cliente, "
+              "ou sai da margem de outro contrato.")
+        if not proj["rampa_informada"]:
+            A("")
+            A("> ⚠️ **Sem rampa informada, o contrato roda cheio desde o mês 1.** Não temos "
+              "série de ramp-up nem de churn — informar uma rampa otimista aqui seria inventar "
+              "receita, então o default é o não-destrutivo.")
     A("")
     S("Premissas assumidas — escrever na proposta")
     A("")
@@ -1323,6 +1682,35 @@ def _conferir_proposta(texto, c):
     return texto
 
 
+def nivel_de_ativacao(c):
+    """Sob a regra MAX, em que nível de recuperação o success fee supera o mínimo.
+
+    O furo §5.2 foi descoberto na conta, DEPOIS de assinar: com fee blended de 6,27% e
+    `MAX(mínimo; success fee)`, o variável do contrato de referência só passava o mínimo a
+    **7,99%** de recuperação sobre a carteira — acima da meta que o próprio credor declara.
+    Contrato de valor fixo com tabela decorativa.
+
+    Devolve o nível de ativação e o nível OBSERVADO (a recuperação que as faixas de fato
+    entregam), que é a comparação que decide. `None` quando não há carteira nem alíquota
+    para calcular — "não sabemos" e "não ativa" são coisas diferentes.
+    """
+    lf = c.get("faixas") or []
+    cart = sum(l["carteira"] for l in lf)
+    if not cart:
+        return None
+    var = sum(l["recuperado_novo"] * c.get("captura", 1.0) * l["aliq"] for l in lf)
+    rec = sum(l["recuperado"] for l in lf)
+    observado = rec / cart
+    fee = (var / rec) if rec else 0.0            # fee blended sobre o recuperado
+    minimo = c["receita"]
+    if fee <= 0:
+        return dict(observado=observado, fee=0.0, ativa_em=None, minimo=minimo, ativa=False)
+    ativa_em = minimo / (fee * cart)             # % da carteira em que o variável = mínimo
+    return dict(observado=observado, fee=fee, ativa_em=ativa_em, minimo=minimo,
+                ativa=ativa_em <= observado,
+                razao=(ativa_em / observado) if observado else None)
+
+
 def _conferir_hibrido(c):
     """O híbrido só se sustenta onde a alíquota encontra recuperação.
 
@@ -1338,6 +1726,23 @@ def _conferir_hibrido(c):
             "faixa — sem o aging não há meta defensável. Use a modalidade fixa ou peça o aging.")
     vivas = [l for l in c["faixas"] if l["aliq"] > 0 and l["meta"] > 0]
     if vivas:
+        # ── 2º modo de falha (parecer 14/09, item `variavel`) ──
+        # A tabela cruza com recuperação, mas sob MAX o variável só supera o mínimo num
+        # nível que a carteira do credor nunca entregou. Foi assim no contrato de
+        # referência: ativa a 7,99% contra 3,68% observados. A tabela existe, o upside
+        # não — e o furo só apareceu DEPOIS de assinar. Agora aparece antes.
+        a = nivel_de_ativacao(c)
+        if a and a["ativa_em"] and not a["ativa"]:
+            raise SystemExit(
+                "⛔ Sob MAX(mínimo; success fee) o variável deste contrato NUNCA ativaria — "
+                "a proposta não foi escrita.\n"
+                f"   · ativa a partir de {a['ativa_em']*100:.2f}% de recuperação sobre a carteira\n"
+                f"   · a carteira do credor entrega {a['observado']*100:.2f}% (observado, por faixa)\n"
+                f"   · são {a['razao']:.2f}× o que a operação dele de fato faz\n"
+                "   É contrato de valor fixo com tabela de enfeite — o mesmo furo do contrato "
+                "de referência, achado depois de assinar.\n   Saídas: modalidade FIXA, ou o "
+                "híbrido por SOMA (em que o variável sempre acompanha), ou recalibrar a tabela "
+                "com o credor.")
         return
     com_aliq = [l["nome"] for l in c["faixas"] if l["aliq"] > 0]
     com_meta = [l["nome"] for l in c["faixas"] if l["meta"] > 0]
@@ -1745,6 +2150,18 @@ def main():
     ap.add_argument("--colchao-efic", type=float, default=0,
                     help="%% do colchão que efetivamente entra (item 10); sem os dois o colchão "
                          "fica declarado e FORA da conta")
+    ap.add_argument("--curva", action="store_true",
+                    help="tabela de preço por volume a margem alvo constante")
+    ap.add_argument("--tornado", action="store_true",
+                    help="ranking de quanto cada parâmetro, sozinho, move a margem")
+    ap.add_argument("--premio-risco", action="store_true",
+                    help="preço na base × preço que aguenta o cenário pessimista")
+    ap.add_argument("--repactuar", default="",
+                    help="compara com o contrato como assinado: UNIDADES:PRECO (ex.: 2:8000)")
+    ap.add_argument("--projecao", type=int, default=0,
+                    help="meses de projeção com payback do setup (ex.: 12)")
+    ap.add_argument("--rampa", default="",
+                    help="fatores da rampa por mês, ex.: '0,5;0,8;1' — PREMISSA, não medição")
     ap.add_argument("--sem-escada", action="store_true",
                     help="omite a escada de régua (ela entra por default)")
     ap.add_argument("--voz-piso", type=float, default=VOZ["piso"] * 100,
@@ -1828,7 +2245,29 @@ def main():
         md = proposta(c, cliente=a.cliente, modalidade=a.modalidade, validade=a.validade)
         rotulo = "proposta"
     else:
-        md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen, escada=esc)
+        kb = dict(cpfs=a.cpfs, regua=a.regua, wa=a.wa, sms=a.sms, email=a.email,
+                  telefones=a.telefones, receita_base=a.receita_base)
+        curva = curva_volume(**{k: v for k, v in kb.items() if k != "cpfs"},
+                             alvo=(a.alvo / 100 if a.alvo is not None else 0.20)) \
+            if a.curva else None
+        torn = tornado(**kb) if a.tornado else None
+        prem = premio_risco(**kb, alvo=(a.alvo / 100 if a.alvo is not None else 0.20)) \
+            if a.premio_risco else None
+        rep = None
+        if a.repactuar:
+            try:
+                u_ass, pr_ass = a.repactuar.split(":")
+                rep = repactuacao(int(u_ass), float(pr_ass.replace(",", ".")), **kb, faixas=faixas)
+            except ValueError:
+                raise SystemExit("⛔ --repactuar espera UNIDADES:PRECO, ex.: 2:8000")
+        proj = None
+        if a.projecao:
+            rampa = [float(x.replace(",", ".")) for x in a.rampa.split(";") if x.strip()] \
+                if a.rampa else None
+            proj = projecao(meses=a.projecao, rampa=rampa, **kb, faixas=faixas,
+                            preco=c["preco"], setup=a.setup, setup_meses=a.setup_meses)
+        md = planilha(c, a.recuperacao, a.fee_variavel, a.cliente, cenarios=cen, escada=esc,
+                      curva=curva, torn=torn, premio=prem, repac=rep, proj=proj)
         rotulo = "planilha"
     if a.saida:
         open(a.saida, "w", encoding="utf-8").write(md + "\n")
