@@ -53,7 +53,8 @@ Opcionais: `--telefones 1.6` · `--realizacao 0.8` · `--preco 8000` ·
 entra por default) · `--voz-piso 44.4 --voz-gamma 1.0` (as duas premissas da resposta à discagem).
 · `--compart-modelo aberto --captura 34` (carteira disputada: o custo é integral, a recuperação é
 fração). O **desconto no principal** entra por faixa no JSON (`desconto` em % e `meta_base_valor`
-= `liquida` | `face`).
+= `liquida` | `face`). O **colchão de acordos** entra com `colchao` em R$ por faixa no JSON +
+`--colchao-meses` e `--colchao-efic` — sem as duas últimas o saldo fica declarado e **fora** da conta.
 
 **Deriva o preço do custo em vez de fixá-lo** com `--alvo 20` (margem alvo em %). Com `--alvo 0`
 sai o equilíbrio exato. Cada carteira tem o seu preço, porque cada uma custa diferente.
@@ -133,14 +134,21 @@ credor tiver número próprio, e diga na planilha que é premissa.
    vezes; não abater de uma taxa de face superestima pelo tamanho do desconto — numa faixa de 40%,
    40% de erro nos dois sentidos. Por isso cada faixa declara `meta_base_valor`, como já declara o
    denominador.
-10. **Discar mais e discar menos têm dono diferente.** A escada de régua move as duas pontas —
+10. **Colchão de acordos parte a recuperação em duas.** Parcela de acordo já firmado chega
+   discando ou não. Dentro da meta, ela infla o gatilho, faz o merecimento creditar à discagem o
+   que a discagem não produziu, e cobra alíquota sobre acordo de outra assessoria. Com o colchão
+   informado, a perda de cadência e a escada de régua só mordem o **acionável**, e a variável passa
+   a ser sobre a recuperação **NOVA**. O merecimento ganha a coluna `R$ por R$ 1 NOVO` — a leitura
+   de esforço — sem trocar a do credor. ⚠️ Peça a eficiência **em R$**, não por contagem: na nossa
+   operação o cumprimento é 17,6% em R$ contra 31,8% por contagem.
+11. **Discar mais e discar menos têm dono diferente.** A escada de régua move as duas pontas —
    custo e recuperação — e imprime o Δ para o credor e o Δ para a Coral no mesmo degrau. Com o
    variável inativo ou cadastrado só em faixas que recuperam zero, subir a régua é ganho inteiro
    do credor e custo inteiro nosso; é o conflito de incentivo do corte de cadência, com o sinal
    trocado. ⚠️ A resposta da recuperação à discagem é **transplantada** da nossa operação de voz
    (piso espontâneo 44,4%, retorno proporcional até 10 tentativas) para a recuperação observada na
    operação do credor — é a premissa de maior alavanca da seção, e vai escrita.
-11. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
+12. **O tributo já é progressivo.** Acima de R$ 62.500/mês de receita (somada à `--receita-base`)
    o adicional de IRPJ entra na conta e a carga efetiva vai de 16,33% para até 19,53%. A planilha
    imprime a alíquota efetiva do contrato — confira se ela bate com a faixa que você esperava.
 

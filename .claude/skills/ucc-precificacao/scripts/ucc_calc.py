@@ -105,6 +105,8 @@ def carregar_faixas(caminho, padrao):
                                  if f.get("carteira_entrada") is not None else None),
             "meta": float(f.get("meta", 0)) / 100, "aliq": float(f.get("aliq", 0)) / 100,
             "base_meta": str(f.get("base_meta", "trabalhado")).strip().lower(),
+            # item 9 do discovery: saldo de parcelas a vencer de acordos já firmados
+            "colchao": float(f.get("colchao", 0) or 0),
             # item 13 do discovery: desconto máximo no principal aceito na faixa
             "desconto": float(f.get("desconto", 0) or 0) / 100,
             # sobre QUAL valor a taxa de recuperação do item 8 foi medida
@@ -255,11 +257,12 @@ def _acionar(cpfs, regua, telefones, wa, sms, email, realizacao=None, cenario=No
 # uma planilha sem ficha.
 FICHA_CHAVES = ("cpfs", "faixas", "entrada_mes", "base_meta", "carteira_entrada",
                 "regua", "telefones", "cadencia", "carteira_faixa", "meta", "aliq",
-                "ancora", "transbordo", "compartilhamento", "desconto")
+                "ancora", "transbordo", "compartilhamento", "desconto", "colchao")
 
 
 def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbordo,
-           entrada_sem_valor, compart_modelo="exclusivo", captura=1.0):
+           entrada_sem_valor, compart_modelo="exclusivo", captura=1.0,
+           colchao_ativo=False):
     aging = bool(lf)
     ent = sum(l["entrada_mes"] for l in lf)
     na = lambda cond, v: v if cond else "na"
@@ -286,13 +289,18 @@ def _ficha(cpfs, regua, telefones, wa, sms, email, lf, ancora_propria, transbord
                              else "falta" if captura >= 1 else "ok"),
         # a política de desconto é do credor; sem ela a proposta escreve uma premissa a menos
         "desconto": na(aging, "ok" if any(l["desconto"] > 0 for l in lf) else "assumido"),
+        # saldo informado sem prazo/eficiência não vira recuperação do mês: fica declarado e
+        # FORA da conta, que é o não-destrutivo — mas a ficha não deixa passar como resolvido
+        "colchao": na(aging, "assumido" if not any(l["colchao"] > 0 for l in lf)
+                      else "ok" if colchao_ativo else "falta"),
     }
 
 
 def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=None,
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
              faixas=None, elast=None, ancora=None, cenario=None,
-             compart_modelo="exclusivo", captura=1.0):
+             compart_modelo="exclusivo", captura=1.0,
+             colchao_meses=0, colchao_efic=0.0):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
     # item 7 do discovery. Em mar aberto discamos a base INTEIRA (custo integral) e a
@@ -304,6 +312,15 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
     captura = 1.0 if compart_modelo == "exclusivo" else float(captura)
     if not 0 < captura <= 1:
         raise SystemExit(f"⛔ captura fora de 0-100% ({captura}).")
+    # itens 9 e 10 do discovery. O colchão só entra na conta com as DUAS pontas: sem prazo
+    # e sem eficiência não há como converter saldo em recuperação do mês, e inventar
+    # qualquer uma delas é a mesma classe de erro do `base_meta`. Sem elas, o colchão fica
+    # DECLARADO e FORA — a conta roda exatamente como antes.
+    colchao_meses = float(colchao_meses or 0)
+    colchao_efic = float(colchao_efic or 0)
+    if colchao_meses < 0 or not 0 <= colchao_efic <= 1:
+        raise SystemExit(f"⛔ colchão inválido (meses={colchao_meses}, efic={colchao_efic}).")
+    colchao_ativo = colchao_meses > 0 and colchao_efic > 0
     if faixas:
         faixas = [_normalizar_faixa(f) for f in faixas]
         # o TRABALHADO (estoque + entrada do mês) é a verdade da carteira, não a foto
@@ -328,11 +345,19 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
                       + max(0.0, sms - f["sms"]) * elast["sms"]
                       + max(0.0, email - f["email"]) * elast["email"])
         rec_base = f["carteira_meta"] * f["meta"] * f["fator_desconto"]
+        # o colchão chega discando ou não: a perda de cadência e a escada de régua só
+        # mordem o ACIONÁVEL. Cortar WhatsApp não atrasa parcela de acordo já firmado.
+        colchao_bruto = (f["colchao"] / colchao_meses * colchao_efic) if colchao_ativo else 0.0
+        colchao_mes = min(colchao_bruto, rec_base)
+        acionavel = rec_base - colchao_mes
         acion = a["telecom"] + a["msg"] + a["crm"]
         lf.append(dict(
             **f, **{k: a[k] for k in ("telecom", "msg", "crm", "tent_esperada")},
             acionamento=acion, rec_base=rec_base, perda_frac=perda_frac,
-            perda=rec_base * perda_frac, recuperado=rec_base * (1 - perda_frac),
+            colchao_mes=colchao_mes, colchao_excede=colchao_bruto > rec_base + 1e-9,
+            acionavel=acionavel, recuperado_novo=acionavel * (1 - perda_frac),
+            perda=acionavel * perda_frac,
+            recuperado=colchao_mes + acionavel * (1 - perda_frac),
             economia=(cheia["telecom"] + cheia["msg"] + cheia["crm"]) - acion,
         ))
     linhas = [
@@ -366,7 +391,9 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         l["custo"] = l["capacidade"] + l["acionamento"]
         l["por_real"] = (l["custo"] / l["recuperado"]) if l["recuperado"] > 0 else None
         # o custo é INTEGRAL (discamos a base toda); só a recuperação é disputada
-        l["recuperado_coral"] = l["recuperado"] * captura
+        # a NOVA é o que depende de nós; a variável cobra sobre ela, não sobre acordo alheio
+        l["recuperado_coral"] = l["recuperado_novo"] * captura
+        l["por_real_novo"] = (l["custo"] / l["recuperado_novo"]) if l["recuperado_novo"] > 0 else None
         l["variavel"] = l["recuperado_coral"] * l["aliq"]
 
     if alvo is None:
@@ -386,6 +413,10 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         entrada_sem_valor=[l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
         recuperado=sum(l["recuperado"] for l in lf),
         recuperado_coral=sum(l["recuperado_coral"] for l in lf),
+        recuperado_novo=sum(l["recuperado_novo"] for l in lf),
+        colchao_mes=sum(l["colchao_mes"] for l in lf),
+        colchao_excede=[l["nome"] for l in lf if l["colchao_excede"]],
+        colchao_meses=colchao_meses, colchao_efic=colchao_efic, colchao_ativo=colchao_ativo,
         compart_modelo=compart_modelo, captura=captura,
         rec_base_total=sum(l["rec_base"] for l in lf),
         perda_total=sum(l["perda"] for l in lf),
@@ -408,7 +439,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         ficha=_ficha(cpfs, regua, telefones, wa, sms, email, lf,
                      bool(ancora), transbordo,
                      [l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
-                     compart_modelo, captura),
+                     compart_modelo, captura, colchao_ativo),
         ocupacao=cpfs / (u * P["tam_ucc"]),
     )
 
@@ -486,9 +517,11 @@ def sensibilidade_regua(reguas=None, voz=None, **kw):
         for l0, l in zip(base["faixas"], c["faixas"]):
             t0 = l0["tent_esperada"]
             mult = (l["tent_esperada"] / t0) if t0 else 1.0
-            r = l0["recuperado"] * (piso + (1 - piso) * mult ** gamma)
-            rec += r
-            var += r * captura * l["aliq"]
+            # discar mais não antecipa parcela contratada: o colchão é PISO da escada,
+            # ao lado do piso espontâneo, e só a recuperação NOVA se move com a régua
+            nova = l0["recuperado_novo"] * (piso + (1 - piso) * mult ** gamma)
+            rec += l0["colchao_mes"] + nova
+            var += nova * captura * l["aliq"]
         receita = u * preco_base
         liq = receita - tributo_de(receita, rb)
         liq_var = (receita + var) - tributo_de(receita + var, rb)
@@ -690,6 +723,8 @@ FICHA_LINHAS = (
      "em mar aberto o custo é integral e a recuperação é disputada"),
     ("desconto", "Desconto no principal por faixa",
      "a alíquota incide sobre o negociado, não sobre a face"),
+    ("colchao", "Colchão de acordos — saldo, prazo e eficiência",
+     "parcela de acordo já firmado chega sem esforço novo e infla a meta"),
 )
 
 
@@ -755,12 +790,21 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
         A("Custo e recuperação na mesma linha. A coluna que decide é **R$ gasto por R$ 1 "
           "recuperado** — cortar cadência numa faixa economiza de um lado e destrói recuperação "
           "do outro, e as duas pontas aparecem juntas.")
+        if c["colchao_mes"] > 0:
+            A("")
+            A("> 📌 **Duas colunas de merecimento, de propósito.** `R$ por R$ 1` é a leitura do "
+              "**credor** (custo sobre tudo que a faixa recupera) e reconcilia com o teto de "
+              "R$ 0,30. `R$ por R$ 1 NOVO` é a leitura de **esforço**: faixa cuja recuperação é "
+              "quase toda colchão merece menos cadência do que o total dela sugere.")
         A("")
         corte = c["economia_total"] > 1
+        colch = c["colchao_mes"] > 0
         cab = ("| Faixa | CPFs | Carteira | Recuperado | % recup. | Custo | % custo | R$ por R$ 1 |"
+               + (" R$ por R$ 1 NOVO |" if colch else "")
                + (" Economia | Perdido | Perde por R$ 1 |" if corte else ""))
         A(cab)
-        A("|---|--:|--:|--:|--:|--:|--:|--:|" + ("--:|--:|--:|" if corte else ""))
+        A("|---|--:|--:|--:|--:|--:|--:|--:|" + ("--:|" if colch else "")
+          + ("--:|--:|--:|" if corte else ""))
         for l in c["faixas"]:
             pr = ("R$ " + num(l["por_real"], 4 if l["por_real"] < 0.1 else 2)
                   if l["por_real"] is not None else "—")
@@ -768,6 +812,11 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
                      f"{br(l['recuperado'])} | "
                      f"{num(l['recuperado']/c['recuperado']*100,1) if c['recuperado'] else '0,0'}% | "
                      f"{br(l['custo'])} | {num(l['custo']/c['custo_medido']*100,1)}% | {pr} |")
+            if colch:
+                prn = l["por_real_novo"]
+                # faixa que não recupera nada não é "só colchão" — é nada a medir
+                linha += (" " + ("R$ " + num(prn, 4 if prn < 0.1 else 2) if prn is not None
+                                 else "só colchão" if l["recuperado"] > 0 else "—") + " |")
             if corte:
                 linha += (f" {br(l['economia']) if l['economia'] > 0.5 else '—'} |"
                           f" {br(l['perda']) if l['perda'] > 0.5 else '—'} |"
@@ -776,6 +825,9 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
         tot = (f"| **Total** | **{num(c['cpfs'])}** | **{br(c['carteira'])}** | "
                f"**{br(c['recuperado'])}** | 100% | **{br(c['custo_medido'])}** | 100% | "
                f"**{'R$ ' + num(c['custo_medido']/c['recuperado'], 4) if c['recuperado'] else '—'}** |")
+        if colch:
+            tot += (" **" + ("R$ " + num(c["custo_medido"] / c["recuperado_novo"], 4)
+                             if c["recuperado_novo"] > 0 else "—") + "** |")
         if corte:
             tot += (f" **{br(c['economia_total'])}** | **{br(c['perda_total'])}** | "
                     f"**R$ {num(c['perda_total']/c['economia_total'],2)}** |")
@@ -896,10 +948,11 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "**otimista** mexe só na régua, 10% abaixo da medida — o que dá errado em execução "
           "não tem espelho do lado que dá certo, e uma banda simétrica seria uma banda falsa.")
 
-    if c.get("compart_modelo", "exclusivo") != "exclusivo" or any(
-            l["desconto"] > 0 for l in c["faixas"]):
+    tem_colchao = any(l["colchao"] > 0 for l in c["faixas"])
+    if (c.get("compart_modelo", "exclusivo") != "exclusivo"
+            or any(l["desconto"] > 0 for l in c["faixas"]) or tem_colchao):
         A("")
-        S("Compartilhamento e desconto")
+        S("O que chega sem ser nosso")
         A("")
         A("| Item | Valor | Efeito na conta |")
         A("|---|--:|---|")
@@ -909,8 +962,10 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           f"| base da nossa variável |")
         A(f"| Recuperação da faixa (total do credor) | {br(c['recuperado'])} "
           "| merecimento e teto de R$ 0,30 leem esta |")
-        A(f"| **Recuperação capturada pela Coral** | **{br(c['recuperado_coral'])}** "
-          "| **a alíquota incide sobre esta** |")
+        A(f"| Recuperação NOVA (fora o colchão) | {br(c['recuperado_novo'])} "
+          "| o que depende do nosso acionamento |")
+        A(f"| **Base da nossa variável** | **{br(c['recuperado_coral'])}** "
+          "| **NOVA × captura — a alíquota incide sobre esta** |")
         for l in c["faixas"]:
             if l["desconto"] > 0:
                 base_rot = ("de FACE — a conta abate o desconto" if l["meta_base_valor"] == "face"
@@ -922,6 +977,35 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
             A("> ⛔ **Carteira declarada não-exclusiva com captura em 100%.** O custo já é "
               "integral; assumir que toda a recuperação vira fatura nossa é a premissa mais "
               "otimista possível. Informe a fração que esperamos capturar.")
+
+        if tem_colchao:
+            A("")
+            A("**Colchão de acordos** — parcela de acordo já firmado chega discando ou não. A "
+              "perda de cadência e a escada de régua só mordem o **acionável**, e a variável "
+              "cobra sobre a recuperação **NOVA**: assessoria é paga pelo que ELA recupera.")
+            A("")
+            if not c.get("colchao_ativo"):
+                A(f"> ⛔ **Saldo informado ({br(sum(l['colchao'] for l in c['faixas']))}) sem "
+                  "prazo restante e/ou eficiência.** Sem as duas pontas não há como converter "
+                  "estoque em recuperação do mês, então o colchão fica **declarado e FORA da "
+                  "conta** — inventar prazo ou cumprimento seria erro da mesma classe do "
+                  "denominador da meta. Peça os itens 9 e 10 do discovery.")
+            else:
+                A(f"| Item | Valor |")
+                A("|---|--:|")
+                A(f"| Saldo a vencer (soma das faixas) | {br(sum(l['colchao'] for l in c['faixas']))} |")
+                A(f"| Prazo restante | {num(c['colchao_meses'], 1)} meses |")
+                A(f"| Eficiência | {pct(c['colchao_efic'], 0).lstrip('+')} |")
+                A(f"| **Colchão no mês** | **{br(c['colchao_mes'])}** |")
+                A(f"| Recuperação da faixa (total) | {br(c['recuperado'])} |")
+                A(f"| **Recuperação NOVA — a que depende de nós** | **{br(c['recuperado_novo'])}** |")
+                if c["colchao_excede"]:
+                    A("")
+                    A("> ⛔ **Colchão maior que a recuperação observada** em "
+                      + ", ".join(f"**{n}**" for n in c["colchao_excede"])
+                      + ". O saldo sozinho entregaria mais do que a faixa inteira entrega — "
+                      "entrada inconsistente. A conta limitou ao teto da faixa; confira o saldo "
+                      "e o prazo antes de usar o número.")
 
     if escada:
         A("")
@@ -1540,6 +1624,11 @@ def main():
                     help="como a carteira é repartida entre assessorias (default %(default)s)")
     ap.add_argument("--captura", type=float, default=100.0,
                     help="%% da recuperação que esperamos capturar; só vale fora do exclusivo")
+    ap.add_argument("--colchao-meses", type=float, default=0,
+                    help="prazo médio restante das parcelas a vencer (item 9 do discovery)")
+    ap.add_argument("--colchao-efic", type=float, default=0,
+                    help="%% do colchão que efetivamente entra (item 10); sem os dois o colchão "
+                         "fica declarado e FORA da conta")
     ap.add_argument("--sem-escada", action="store_true",
                     help="omite a escada de régua (ela entra por default)")
     ap.add_argument("--voz-piso", type=float, default=VOZ["piso"] * 100,
@@ -1579,6 +1668,7 @@ def main():
                  receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
                  pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                  compart_modelo=a.compart_modelo, captura=a.captura / 100,
+                 colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
                  elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100))
     cen = None
     if not a.sem_banda:
@@ -1589,6 +1679,7 @@ def main():
                     receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
                     pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                     compart_modelo=a.compart_modelo, captura=a.captura / 100,
+                    colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
                     elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
                                email=a.elast_email / 100))
     esc = None
@@ -1600,6 +1691,7 @@ def main():
             receita_base=a.receita_base, setup=a.setup, setup_meses=a.setup_meses,
             pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
             compart_modelo=a.compart_modelo, captura=a.captura / 100,
+            colchao_meses=a.colchao_meses, colchao_efic=a.colchao_efic / 100,
             elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100, email=a.elast_email / 100),
             voz=dict(piso=a.voz_piso / 100, gamma=a.voz_gamma))
 
