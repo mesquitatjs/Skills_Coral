@@ -22,6 +22,7 @@ Uso:
 """
 import argparse
 import pathlib
+import re
 from math import ceil
 
 # ─── parâmetros (espelho do dossiê — calibração 10/09/2026) ──────────────────
@@ -891,12 +892,226 @@ def proposta(c, cliente="—", modalidade="fixo", validade=None, obs=None):
 
     return _conferir_proposta("\n".join(L), c)
 
+# ── registro da cotação ───────────────────────────────────────────────────────
+# Um arquivo por cotação, com as entradas, o que saiu, e a VERSÃO DOS PARÂMETROS.
+# O parâmetro é a parte que se perde: o contrato de referência foi assinado quando a
+# unidade tinha 3.000 CPFs e hoje roda 20% acima do tamanho, e nenhum documento diz
+# isso porque o número registrado era "2 unidades", que envelheceu em silêncio.
+#
+# Por isso o arquivo carrega um bloco legível por máquina e existe o `--reler`: um
+# documento que ninguém reabre não previne nada.
+
+REGISTRO_VERSAO = 1
+
+
+def _slug(t):
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(t)).encode("ascii", "ignore").decode()
+    t = re.sub(r"[^A-Za-z0-9]+", "-", t).strip("-").lower()
+    return t or "sem-nome"
+
+
+def _entradas(c, extras=None):
+    """As entradas que reproduzem a cotação. Sai do objeto, não de quem chamou."""
+    e = dict(cpfs=c["cpfs"], regua=c["regua"], telefones=c["tel"],
+             wa=c["cad"]["wa"], sms=c["cad"]["sms"], email=c["cad"]["email"],
+             alvo=c["alvo"], preco=c["preco"], receita_base=c["receita_base"],
+             ancora=(c["ancora"] if c["ancora_propria"] else None),
+             setup_mes=c["setup_mes"], transbordo=c["transbordo"],
+             faixas=[{k: l[k] for k in ("nome", "cpfs", "entrada_mes", "carteira",
+                                        "carteira_entrada", "base_meta", "meta", "aliq",
+                                        "regua", "wa", "sms", "email")}
+                     for l in c["faixas"]])
+    e.update(extras or {})
+    return e
+
+
+def registro(c, cliente="—", modalidade="fixo", quando=None, decisao=None):
+    """Markdown da cotação, com o bloco de reprodução no fim."""
+    import json
+    from datetime import date
+    quando = quando or date.today().isoformat()
+    L = []
+    A = L.append
+
+    A(f"# Cotação — {cliente}")
+    A("")
+    A(f"**{quando}** · modalidade {modalidade} · registro v{REGISTRO_VERSAO}")
+    A("")
+    A("> **Interno.** Contém custo e margem. Releia com "
+      "`python3 ucc_calc.py --reler <este arquivo>` — é o `--reler` que acusa parâmetro "
+      "movido desde a cotação, não a leitura do texto.")
+
+    A("")
+    A("## O que saiu")
+    A("")
+    A("| | |")
+    A("|---|--:|")
+    A(f"| Preço por unidade | **{br(c['preco'])}** |")
+    A(f"| Unidades | **{c['uccs']}** |")
+    A(f"| Total mensal | **{br(c['preco'] * c['uccs'])}** |")
+    A(f"| Margem pela medição | **{num(c['margem_medido']*100, 1)}%** |")
+    A(f"| Custo pela medição | {br(c['custo_medido'])} |")
+    A(f"| Equilíbrio por unidade | {br(c['equilibrio'])} |")
+    rot = {"ancora": "âncora", "teto_por_real": "teto por R$ 1 recuperado",
+           "margem_alvo": "margem alvo"}[c["restricao"]]
+    fura = c["restricao_folga"] < 0
+    A(f"| Restrição ativa | **{rot}** — {br(abs(c['restricao_folga']))} "
+      + ("acima" if fura else "de folga") + " |")
+
+    A("")
+    A("## O que foi informado")
+    A("")
+    A("| Entrada | Valor |")
+    A("|---|--:|")
+    A(f"| CPFs | {num(c['cpfs'])} |")
+    A(f"| Régua de tentativas/dia | {num(c['regua'], 1)} |")
+    A(f"| Telefones por CPF | {num(c['tel'], 2)} |")
+    A(f"| WhatsApp · SMS · e-mail por mês | {num(c['cad']['wa'],1)} · "
+      f"{num(c['cad']['sms'],1)} · {num(c['cad']['email'],1)} |")
+    A(f"| Margem alvo | " + (f"{num(c['alvo']*100, 0)}%" if c["alvo"] is not None
+                             else "preço fixado à mão") + " |")
+    A(f"| Receita que a Coral já fatura | {br(c['receita_base'])} |")
+    A(f"| Âncora | {br(c['ancora'])}"
+      + (" (informada pelo credor)" if c["ancora_propria"] else " (genérica)") + " |")
+    if c["faixas"]:
+        A(f"| Faixas de atraso | {len(c['faixas'])} |")
+
+    assumido = []
+    if c["tel"] == 1.0:
+        assumido.append("**telefones por CPF = 1,0** — o discador capeia por linha, "
+                        "então mailing com 1,6 consome 60% mais régua")
+    if not c["ancora_propria"]:
+        assumido.append("**âncora genérica** — o que este credor paga hoje não foi informado")
+    if c["transbordo"] == 0:
+        assumido.append("**transbordo humano = zero**")
+    if c["setup_mes"] == 0:
+        assumido.append("**sem setup amortizado**")
+    if c.get("entrada_sem_valor"):
+        assumido.append("**R$ da entrada mensal não informado** em "
+                        + ", ".join(c["entrada_sem_valor"])
+                        + " — entra no custo e fica fora da recuperação, "
+                        "então o preço é teto")
+    if assumido:
+        A("")
+        A("## O que foi assumido, não informado")
+        A("")
+        for a in assumido:
+            A(f"- {a}")
+
+    A("")
+    A("## Parâmetros usados nesta cotação")
+    A("")
+    A("É a parte que envelhece em silêncio. Registrar só \"2 unidades\" não diz nada daqui "
+      "a um ano se o tamanho da unidade tiver mudado no meio.")
+    A("")
+    A("| Parâmetro | Valor |")
+    A("|---|--:|")
+    for k in ("tam_ucc", "preco_tabela", "bot", "coef_telecom", "wa", "sms", "email",
+              "crm_assento", "compart", "rateio_piso", "tributo", "ancora", "teto_por_real"):
+        if k in P:
+            A(f"| `{k}` | {num(P[k], 4).rstrip('0').rstrip(',') if P[k] < 1 else num(P[k])} |")
+    A(f"| realização da régua | {' · '.join(f'{r}→{v*100:.0f}%' for r, v in REALIZACAO.items())} |")
+
+    A("")
+    A("## Reprodução")
+    A("")
+    A("```cotacao")
+    A(json.dumps({"versao": REGISTRO_VERSAO, "cliente": cliente, "quando": quando,
+                  "modalidade": modalidade,
+                  "entradas": _entradas(c),
+                  "parametros": {k: P[k] for k in sorted(P)},
+                  "realizacao": {str(k): v for k, v in REALIZACAO.items()},
+                  "saida": {"preco": c["preco"], "uccs": c["uccs"],
+                            "custo_medido": c["custo_medido"],
+                            "margem_medido": c["margem_medido"],
+                            "restricao": c["restricao"]}},
+                 ensure_ascii=False, indent=1))
+    A("```")
+    if decisao:
+        A("")
+        A("## Decisão")
+        A("")
+        A(decisao)
+    return "\n".join(L)
+
+
+def reler(caminho):
+    """Roda a cotação de novo com os parâmetros de HOJE e diz o que mudou.
+
+    ⛔ É aqui que o registro deixa de ser documento e vira detector. Um `.md` bonito não
+    impede o erro do contrato de referência: impede quem consegue perguntar "se eu
+    cotasse isto hoje, sairia o mesmo?" e receber não como resposta.
+    """
+    import json
+    txt = pathlib.Path(caminho).read_text(encoding="utf-8")
+    m = re.search(r"```cotacao\n(.*?)\n```", txt, re.S)
+    if not m:
+        raise SystemExit(f"⛔ {caminho} não tem bloco `cotacao` — não dá para reler.")
+    reg = json.loads(m.group(1))
+    e = reg["entradas"]
+
+    L = []
+    A = L.append
+    A(f"# Releitura — {reg['cliente']} (cotado em {reg['quando']})")
+
+    # 1) parâmetros que se moveram
+    antes, agora = reg["parametros"], {k: P[k] for k in sorted(P)}
+    movidos = [(k, antes[k], agora[k]) for k in sorted(set(antes) | set(agora))
+               if antes.get(k) != agora.get(k)]
+    A("")
+    A("## Parâmetros")
+    A("")
+    if movidos:
+        A("| Parâmetro | Na cotação | Hoje |")
+        A("|---|--:|--:|")
+        for k, a, b in movidos:
+            A(f"| `{k}` | {a if a is not None else '—'} | {b if b is not None else '—'} |")
+    else:
+        A("Nenhum parâmetro mudou desde a cotação.")
+
+    # 2) o mesmo cálculo, hoje
+    fx = [dict(f) for f in e["faixas"]] or None
+    c = calcular(cpfs=e["cpfs"], regua=e["regua"], wa=e["wa"], sms=e["sms"], email=e["email"],
+                 telefones=e["telefones"], alvo=e["alvo"], preco=e["preco"],
+                 receita_base=e["receita_base"], faixas=fx, ancora=e["ancora"])
+    s = reg["saida"]
+    A("")
+    A("## O que sairia hoje")
+    A("")
+    A("| | Na cotação | Hoje | |")
+    A("|---|--:|--:|---|")
+    linhas = [("Preço por unidade", s["preco"], c["preco"], br),
+              ("Unidades", s["uccs"], c["uccs"], lambda v: num(v)),
+              ("Custo pela medição", s["custo_medido"], c["custo_medido"], br),
+              ("Margem", s["margem_medido"] * 100, c["margem_medido"] * 100,
+               lambda v: num(v, 1) + "%")]
+    mudou = False
+    for rot, a, b, f in linhas:
+        dif = abs(a - b) > max(0.005, abs(a) * 1e-9)
+        mudou = mudou or dif
+        A(f"| {rot} | {f(a)} | {f(b)} | {'⚠️ mudou' if dif else ''} |")
+    if s["restricao"] != c["restricao"]:
+        mudou = True
+        A(f"| Restrição ativa | {s['restricao']} | {c['restricao']} | ⚠️ mudou |")
+
+    A("")
+    if mudou:
+        A("> ⚠️ **Esta cotação não se reproduz hoje.** Antes de reusar o número, veja acima o "
+          "que se moveu — e se o contrato já foi assinado sob os valores antigos, é o "
+          "contrato que está fora do modelo, não o modelo que está errado.")
+    else:
+        A("> ✅ **Reproduz.** Mesmas entradas, mesmos parâmetros, mesmo número.")
+    return "\n".join(L), mudou
+
 
 def main():
     ap = argparse.ArgumentParser(description="Planilha de precificação UCC")
     ap.add_argument("--cpfs", type=int, default=0,
                     help="base de CPFs; ignorado quando --faixas é usado")
-    ap.add_argument("--regua", type=float, required=True, help="tentativas/CPF/dia contratadas")
+    # obrigatória para cotar, mas não para RELER uma cotação já gravada — ela traz a
+    # própria régua no bloco de reprodução. Exigir aqui derrubava o --reler no parser.
+    ap.add_argument("--regua", type=float, default=None, help="tentativas/CPF/dia contratadas")
     ap.add_argument("--wa", type=float, default=0, help="disparos WhatsApp por CPF/mês")
     ap.add_argument("--sms", type=float, default=0)
     ap.add_argument("--email", type=float, default=0)
@@ -913,6 +1128,13 @@ def main():
     ap.add_argument("--pas", type=float, default=0, help="posições humanas de transbordo")
     ap.add_argument("--pa-custo", type=float, default=None,
                     help=f"custo por posição (default {P['pa_humana']:.0f})")
+    ap.add_argument("--registrar", action="store_true",
+                    help="grava a cotação em comercial/cotacoes/<cliente>_<data>.md")
+    ap.add_argument("--cotacoes-dir", default="cotacoes",
+                    help="pasta do registro (default cotacoes/)")
+    ap.add_argument("--decisao", default=None, help="o que foi decidido, para o registro")
+    ap.add_argument("--reler", default=None,
+                    help="relê uma cotação gravada e diz o que mudou desde então")
     ap.add_argument("--proposta", action="store_true",
                     help="gera a PROPOSTA do cliente (sem custo, sem margem) no lugar da planilha")
     ap.add_argument("--modalidade", choices=("fixo", "hibrido"), default="fixo",
@@ -936,6 +1158,15 @@ def main():
     ap.add_argument("--saida", default=None)
     a = ap.parse_args()
 
+    if a.reler:
+        texto, mudou = reler(a.reler)
+        print(texto)
+        raise SystemExit(1 if mudou else 0)
+
+    if a.regua is None:
+        raise SystemExit("⛔ --regua é obrigatória para cotar: é o parâmetro mais pesado do "
+                         "modelo, porque dirige telecom e capacidade ao mesmo tempo.")
+
     faixas = None
     if a.faixas:
         faixas = carregar_faixas(a.faixas, dict(regua=a.regua, wa=a.wa, sms=a.sms, email=a.email))
@@ -954,6 +1185,16 @@ def main():
                     pas=a.pas, pa_custo=a.pa_custo, faixas=faixas, ancora=a.ancora,
                     elast=dict(wa=a.elast_wa / 100, sms=a.elast_sms / 100,
                                email=a.elast_email / 100))
+    if a.registrar:
+        from datetime import date
+        d = pathlib.Path(a.cotacoes_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        alvo_arq = d / f"{_slug(a.cliente)}_{date.today().isoformat()}.md"
+        alvo_arq.write_text(
+            registro(c, cliente=a.cliente, modalidade=a.modalidade, decisao=a.decisao) + "\n",
+            encoding="utf-8")
+        print(f"cotação registrada em {alvo_arq}")
+
     if a.proposta:
         md = proposta(c, cliente=a.cliente, modalidade=a.modalidade, validade=a.validade)
         rotulo = "proposta"

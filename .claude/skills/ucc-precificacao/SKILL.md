@@ -112,6 +112,31 @@ credor tiver número próprio, e diga na planilha que é premissa.
    o adicional de IRPJ entra na conta e a carga efetiva vai de 16,33% para até 19,53%. A planilha
    imprime a alíquota efetiva do contrato — confira se ela bate com a faixa que você esperava.
 
+### Registre a cotação junto
+
+```bash
+python3 scripts/ucc_calc.py --cpfs 12000 --regua 4 --wa 1 --sms 2 --alvo 20 \
+        --cliente "Nome" --registrar --cotacoes-dir <projetos_coral>/comercial/cotacoes \
+        --decisao "o que ficou decidido, ou o que está aberto"
+```
+
+Grava `<cliente>_<AAAA-MM-DD>.md` com as entradas, o que saiu, o que foi **assumido** e a foto
+do dicionário de parâmetros do dia.
+
+⛔ **O parâmetro é a parte que envelhece em silêncio.** O contrato de referência foi assinado
+quando a unidade tinha 3.000 CPFs e hoje roda as unidades 20% acima do tamanho — o que ficou
+registrado foi "2 unidades", que a essa altura não quer dizer nada.
+
+Para conferir depois:
+
+```bash
+python3 scripts/ucc_calc.py --reler <projetos_coral>/comercial/cotacoes/nome_2026-09-14.md
+```
+
+Roda as **mesmas entradas** com os parâmetros de hoje, lista o que se moveu e reprecifica. Sai com
+**código 1** quando a cotação não se reproduz. Se um contrato assinado não se reproduz, é o
+contrato que está fora do modelo — não o modelo que está errado.
+
 ### Entregue assim
 
 Poste a planilha e, em no máximo cinco linhas, diga: quantas unidades, qual margem pela medição,
