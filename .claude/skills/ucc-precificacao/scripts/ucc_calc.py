@@ -1882,6 +1882,124 @@ def _conferir_proposta(texto, c):
     return texto
 
 
+# ── HÍBRIDO COM GATILHO ──────────────────────────────────────────────────────────
+# `fatura = fixo + Σ_faixa(recuperado × alíquota × (1 + ajuste))`, com o gatilho na
+# ALÍQUOTA e não no R$ — senão a superação é paga duas vezes, porque o R$ já cresce com
+# o volume. Meta = % recuperado sobre a carteira distribuída da faixa, e é a OBSERVADA,
+# nunca a declarada (no contrato de referência a declarada é 1,97× a observada, e com ela
+# o gatilho nasce cravado no piso todo mês, virando desconto fixo).
+#
+# ⚠️ Esta conta viveu só no JS do simulador até 15/09/2026 — fora do `ucc_calc.py` e fora
+#    do harness. Entrou aqui para ficar sob a mesma regra do resto: escrita duas vezes,
+#    conferida por harness, nunca por leitura.
+GATILHO = {"banda": 0.15, "piso": 0.85, "teto": 1.15, "morta": 0.0}
+
+
+def ajuste_gatilho(a, banda=None, piso=None, teto=None, morta=None):
+    """Quanto a alíquota se move para um atingimento `a` da meta (1,0 = na meta).
+
+    Dois eixos que não são a mesma coisa: `a` é DESEMPENHO (quanto a recuperação desviou);
+    o retorno é o movimento da ALÍQUOTA, limitado a ±`banda`. Entre `piso` e `teto` o
+    ajuste é linear; fora deles satura. A `morta` é a banda em torno da meta onde nada se
+    move — sem ela, ruído mensal vira dinheiro trocando de mão todo mês.
+    """
+    b = GATILHO["banda"] if banda is None else banda
+    p = GATILHO["piso"] if piso is None else piso
+    t = GATILHO["teto"] if teto is None else teto
+    m = GATILHO["morta"] if morta is None else morta
+    if abs(a - 1) <= m:
+        return 0.0
+    if a < 1:
+        lo = 1 - m
+        return -b if a <= p else -b * (lo - a) / (lo - p)
+    hi = 1 + m
+    return b if a >= t else b * (a - hi) / (t - hi)
+
+
+def apurar(c, d=1.0, **kw):
+    """Apura a variável do credor com o desempenho `d` (1,0 = na meta observada)."""
+    lf = c.get("faixas") or []
+    linhas = []
+    for l in lf:
+        rec = l["recuperado"] * d
+        aj = ajuste_gatilho(d, **kw) if l["recuperado"] > 0 else 0.0
+        linhas.append({**l, "rec": rec, "aj": aj,
+                       "var_meta": l["recuperado"] * l["aliq"],
+                       "variavel": rec * l["aliq"] * (1 + aj)})
+    recuperado = sum(l["rec"] for l in linhas)
+    variavel = sum(l["variavel"] for l in linhas)
+    carteira = sum(l["carteira"] for l in lf)
+    return dict(linhas=linhas, recuperado=recuperado, variavel=variavel, carteira=carteira,
+                fee_efetivo=(variavel / recuperado) if recuperado else 0.0,
+                nivel=(recuperado / carteira) if carteira else 0.0)
+
+
+def nivel_que_fura(c, fixo=None, **kw):
+    """Abaixo de que nível de recuperação a SOMA fixo+variável fura o teto de R$ 0,30/R$ 1.
+
+    A objeção clássica ao híbrido por soma. Refeita na carteira certa, ela só morde quando
+    a operação vai mal — que é exatamente quando o gatilho para baixo já está agindo.
+    Devolve `None` quando o teto nunca é furado, ou quando é furado em todo o intervalo.
+    """
+    f = c["receita"] if fixo is None else fixo
+
+    def custo1(d):
+        a = apurar(c, d, **kw)
+        return (f + a["variavel"]) / a["recuperado"] if a["recuperado"] > 0 else float("inf")
+
+    if custo1(0.01) < P["teto_por_real"]:
+        return None
+    lo, hi = 0.01, 20.0
+    if custo1(hi) > P["teto_por_real"]:
+        return None
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if custo1(mid) > P["teto_por_real"]:
+            lo = mid
+        else:
+            hi = mid
+    return apurar(c, hi, **kw)["nivel"]
+
+
+def hibrido(c, desempenho=0.0, **kw):
+    """Os cenários do híbrido: só fixo · na meta · no desempenho pedido · ±20%.
+
+    Os cenários usam ±20% de desempenho porque, sob a regra sugerida (85% → piso,
+    115% → teto), esse desvio já SATURA o gatilho. As duas alavancas multiplicam:
+    0,80 × 0,85 = 0,68 (−32%) e 1,20 × 1,15 = 1,38 (+38%).
+    """
+    # ⚠️ o `calcular` chama o custo de `custo_medido`; o motor do simulador chama `custo`.
+    #    Aceitar os dois nomes aqui é o que impede a ponte de virar uma terceira conta.
+    fixo = c["receita"]
+    custo = c["custo_medido"] if "custo_medido" in c else c["custo"]
+
+    def linha(rec, variavel):
+        fat = fixo + variavel
+        return dict(rec=rec, variavel=variavel, fatura=fat,
+                    margem=((fat - tributo_de(fat, c.get("receita_base", 0.0) or 0.0) - custo) / fat)
+                    if fat else 0.0,
+                    por_real=(fat / rec) if rec else 0.0)
+
+    M = apurar(c, 1.0, **kw)
+    A = apurar(c, 1 + desempenho, **kw)
+    Lo = apurar(c, 0.8, **kw)
+    Hi = apurar(c, 1.2, **kw)
+    return dict(
+        fixo=fixo, custo=custo, desempenho=desempenho,
+        meta_observada=M["nivel"], fee_efetivo=M["fee_efetivo"],
+        so_fixo=linha(M["recuperado"], 0.0),
+        na_meta=linha(M["recuperado"], M["variavel"]),
+        cenario=linha(A["recuperado"], A["variavel"]),
+        abaixo=linha(Lo["recuperado"], Lo["variavel"]),
+        acima=linha(Hi["recuperado"], Hi["variavel"]),
+        ajuste=ajuste_gatilho(1 + desempenho, **kw),
+        nivel_que_fura=nivel_que_fura(c, fixo, **kw),
+        # faixa que responde por menos de 1% da recuperação: meta ali não mede nada
+        sem_massa=[l["nome"] for l in M["linhas"]
+                   if M["recuperado"] > 0 and l["recuperado"] / M["recuperado"] < 0.01],
+        linhas=M["linhas"])
+
+
 def nivel_de_ativacao(c):
     """Sob a regra MAX, em que nível de recuperação o success fee supera o mínimo.
 
