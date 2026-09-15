@@ -607,6 +607,22 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
                             if serie_stat and serie_stat["media"] else False),
         compart_modelo=compart_modelo, captura=captura,
         rec_base_total=sum(l["rec_base"] for l in lf),
+        # ── o que a curva de maturação espalha no tempo é o valor NEGOCIADO ──────────────
+        # A alíquota do credor incide sobre o que foi acordado, não sobre a face: uma faixa
+        # que fecha com 40% de desconto entrega 60% do R$ e remunera sobre esses 60%. O
+        # `fator_desconto` já entra no `rec_base`, então a conta estava certa — o que
+        # faltava era o número aparecer ao lado da curva, que é onde alguém lê "R$ por mês"
+        # e precisa saber de qual R$ se trata.
+        rec_face_total=sum(l["carteira_meta"] * l["meta"] for l in lf),
+        desconto_efetivo=(1 - (sum(l["rec_base"] for l in lf)
+                               / sum(l["carteira_meta"] * l["meta"] for l in lf)))
+                          if sum(l["carteira_meta"] * l["meta"] for l in lf) else 0.0,
+        faixas_desconto_face=[l["nome"] for l in lf
+                              if l["desconto"] > 0 and l["meta_base_valor"] == "face"],
+        # desconto informado que NÃO abate nada — a taxa já era líquida. Não é erro, mas
+        # quem informou 40% e vê a recuperação intacta merece saber por quê.
+        faixas_desconto_inerte=[l["nome"] for l in lf
+                                if l["desconto"] > 0 and l["meta_base_valor"] != "face"],
         perda_total=sum(l["perda"] for l in lf),
         economia_total=sum(l["economia"] for l in lf),
         variavel=sum(l["variavel"] for l in lf),
@@ -639,24 +655,34 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
 # ── voz: o que a tentativa a mais faz com a recuperação ──────────────────────
 # O corte de CADÊNCIA (WhatsApp/SMS/e-mail) já tinha elasticidade; a RÉGUA não tinha
 # nenhuma, então discar mais só aparecia como despesa e discar menos só como economia.
-# Duas premissas, as duas com procedência declarada:
 #
-#   piso  — fração da recuperação que acontece SEM discagem nenhuma. MEDIDO em jul/2026
-#           na operação de Receita Garantida: dos R$ 17,15M recuperados, 44,4% foram
-#           espontâneos e 99,4% deles sem nenhum toque nosso. Sem esse piso a conta
-#           afirma que régua zero recupera zero, que é falso por quase metade.
-#   gamma — retorno da tentativa a mais. 1,0 = a parte acionada acompanha a tentativa
-#           EFETIVA na proporção. MEDIDO no Ouro: o R$/acordo da faixa cortada é plano
-#           de 1 a 10 tentativas (79,17 cortando após a 1ª × 79,09 cortando só a 10ª),
-#           e o ROI por faixa cortada replicou o mesmo achado por outra medida.
-#           gamma < 1 é o que cria ponto de virada; medimos que não há, até 10.
+#   gamma — retorno da tentativa a mais. 1,0 = a recuperação acompanha a tentativa EFETIVA
+#           na proporção. MEDIDO no Ouro: o R$/acordo da faixa cortada é plano de 1 a 10
+#           tentativas (79,17 cortando após a 1ª × 79,09 cortando só a 10ª), e o ROI por
+#           faixa cortada replicou o mesmo achado por outra medida. gamma < 1 é o que cria
+#           ponto de virada; medimos que não há, até 10.
 #
-# ⚠️ O retorno decrescente que ESTE modelo tem vem da REALIZAÇÃO (93% na régua 2, 68%
-# na 10): subir a régua contratada compra cada vez menos tentativa efetiva. Por tentativa
-# efetiva, custo e recuperação andam no mesmo passo — que é o que foi medido.
+# ⛔ O PISO ESPONTÂNEO SAIU DA CONTA (default 0, 15/09/2026 — decisão do Head of Collection).
+# Ele era 44,4%, MEDIDO em jul/2026: dos R$ 17,15M recuperados na Receita Garantida, 44,4%
+# foram espontâneos. Só que esse número é da carteira INTEIRA do credor, e a conta da UCC
+# roda sobre a carteira DISTRIBUÍDA — que já chega sem o espontâneo, porque o credor retira
+# o que recupera sozinho antes de terceirizar. Aplicar o piso aqui contava o espontâneo duas
+# vezes, e sempre para o mesmo lado: inflava a recuperação que a discagem não precisa
+# produzir, fazendo régua baixa parecer barata.
+#
+# O campo continua editável e existe para a carteira que NÃO foi filtrada — se o credor
+# manda a base inteira, parte dela paga sem toque e o piso volta a valer. Quem informar um
+# piso aqui está afirmando que a distribuída ainda contém espontâneo, e isso vai para a
+# proposta como premissa.
+#
+# ⚠️ Com piso 0 e gamma 1 a recuperação é PROPORCIONAL à tentativa efetiva: metade da régua,
+# metade da recuperação. É mais agressivo do que era, e é a leitura correta de uma carteira
+# em que tudo que entra depende de acionamento.
+# ⚠️ O retorno decrescente que ESTE modelo tem vem da REALIZAÇÃO (93% na régua 2, 68% na 10):
+# subir a régua contratada compra cada vez menos tentativa efetiva.
 # ⛔ LACUNA: régua maior exige mais CANAIS, e o de-para bot ↔ canal não existe. A escada
 # cobra o telecom da tentativa a mais e NÃO cobra capacidade adicional.
-VOZ = {"piso": 0.444, "gamma": 1.0}
+VOZ = {"piso": 0.0, "gamma": 1.0}
 
 
 def escada_regua(base, passos=2, minimo=0.5):
@@ -1535,11 +1561,17 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
             A("> ⛔ Algum degrau projeta recuperação **maior que a carteira inteira**. "
               "Extrapolação longe da régua cadastrada não se sustenta — descarte os extremos.")
         A("")
-        A(f"Piso espontâneo **{num(VOZ['piso']*100, 1)}%** (MEDIDO — jul/2026, Receita "
-          f"Garantida) e retorno por tentativa **{num(VOZ['gamma'], 2)}** (1,00 = proporcional, o medido no Ouro "
-          "de 1 a 10 tentativas). ⚠️ A recuperação de cada faixa foi observada na operação atual "
-          "do credor, que não é a nossa. ⛔ A escada cobra o telecom do degrau e **não** cobra "
-          "capacidade adicional — o de-para bot ↔ canal não existe.")
+        A(f"Retorno por tentativa **{num(VOZ['gamma'], 2)}** (1,00 = proporcional, o medido no "
+          f"Ouro de 1 a 10 tentativas)"
+          + (f" e piso espontâneo **{num(VOZ['piso']*100, 1)}%** — informado, então esta carteira "
+             "está declarada como NÃO filtrada pelo credor."
+             if VOZ["piso"] > 0 else
+             ". **Sem piso espontâneo**: a carteira distribuída já chega sem o que o credor "
+             "recupera sozinho, então toda a recuperação aqui depende de acionamento e metade "
+             "da régua é metade da recuperação.")
+          + " ⚠️ A recuperação de cada faixa foi observada na operação atual do credor, que não é "
+            "a nossa. ⛔ A escada cobra o telecom do degrau e **não** cobra capacidade adicional — "
+            "o de-para bot ↔ canal não existe.")
 
     A("")
     S("Ficha de entrada")
@@ -1711,6 +1743,27 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           "nos seguintes. A carteira não nasce em regime: ela **matura**. E o custo não espera "
           "— discamos a base inteira já no mês 1.")
         A("")
+        # O que a curva espalha é o NEGOCIADO, e é sobre ele que a alíquota incide.
+        if c["rec_face_total"]:
+            if c["desconto_efetivo"] > 0:
+                A(f"O que a curva espalha é o **valor negociado**: de {br(c['rec_face_total'])} "
+                  f"de face, o desconto de **{pct(c['desconto_efetivo'], 1).lstrip('+')}** deixa "
+                  f"**{br(c['rec_base_total'])}** — e é sobre esses que a alíquota do credor "
+                  f"incide. Desconto aplicado em: "
+                  + ", ".join(f"**{n}**" for n in c["faixas_desconto_face"]) + ".")
+            else:
+                A(f"O que a curva espalha é o **valor negociado** — {br(c['rec_base_total'])}, "
+                  "a base sobre a qual a alíquota do credor incide. Nenhuma faixa abate "
+                  "desconto: as taxas informadas já são líquidas (`meta_base_valor = liquida`), "
+                  "então o negociado é a própria recuperação observada.")
+            if c["faixas_desconto_inerte"]:
+                A("")
+                A("> ⚠️ **Desconto informado que não abate nada** em "
+                  + ", ".join(f"**{n}**" for n in c["faixas_desconto_inerte"])
+                  + ": a taxa dessas faixas foi declarada **líquida**, e abater de novo "
+                    "descontaria duas vezes. Se a taxa informada for de FACE, troque "
+                    "`meta_base_valor` para `face` — a diferença é do tamanho do desconto.")
+            A("")
         cab = "| Mês | Maturação | Recuperado | Fixa | Variável | Custo | Resultado | Acumulado |"
         A(cab)
         A("|--:|--:|--:|--:|--:|--:|--:|--:|")
