@@ -273,14 +273,21 @@ def carregar_faixas(caminho, padrao):
         raise SystemExit(f"⛔ {caminho}: esperava uma lista não-vazia de faixas.")
     faixas = []
     for i, f in enumerate(dados, 1):
-        if "cpfs" not in f or not f.get("cpfs"):
+        # ⚠️ O guard recusa a AUSÊNCIA do campo, não o zero (15/09/2026). A intenção é a
+        # mesma de sempre — CPFs e reais são entrada obrigatória, e derivar um do outro por
+        # ticket médio uniforme assume algo que o aging costuma desmentir. Mas recusar um
+        # zero DECLARADO fazia a calculadora e a bancada divergirem no mesmo dado: a tela
+        # aceita (o campo fica vazio enquanto se digita) e o arquivo estourava. Agora as
+        # duas aceitam, a faixa recupera ZERO e a linha sai marcada — conservador e visível,
+        # em vez de generoso e silencioso.
+        if "cpfs" not in f:
             raise SystemExit(
                 f"⛔ faixa {i} ({f.get('nome','sem nome')}) sem CPFs. O custo escala com CPF e a "
                 "variável com reais — os dois números são entrada obrigatória, e derivar um do "
                 "outro por ticket médio uniforme assume algo que o aging costuma desmentir.")
         faixas.append({
             "nome": f.get("nome", f"faixa {i}"),
-            "cpfs": float(f["cpfs"]), "carteira": float(f.get("carteira", 0)),
+            "cpfs": float(f["cpfs"] or 0), "carteira": float(f.get("carteira", 0)),
             "entrada_mes": float(f.get("entrada_mes", 0) or 0),
             "carteira_entrada": (float(f["carteira_entrada"])
                                  if f.get("carteira_entrada") is not None else None),
@@ -304,6 +311,20 @@ def carregar_faixas(caminho, padrao):
             "email": float(f.get("email", padrao["email"])),
         })
     return faixas
+
+
+def rateio_de(cpfs):
+    """Fração do compartilhado que ESTE contrato paga.
+
+    ⛔ O teto de 100% não existia até 15/09/2026. `max(3%; 1% a cada 1.000 CPFs)` cresce
+    sem parar: a 200.000 CPFs um contrato sozinho pagaria R$ 68.800 de um pool de
+    R$ 34.400 — o dobro do que existe para ratear. Ninguém tinha cotado carteira desse
+    tamanho, então o furo nunca apareceu num número publicado; mas ele mora na fórmula, e
+    a fórmula é o que vai para a próxima cotação.
+
+    O teto morde a partir de 100.000 CPFs, que é exatamente onde o rateio fecha o pool.
+    """
+    return min(1.0, max(P["rateio_piso"], cpfs * P["rateio_por_cpf"]))
 
 
 def tributo_de(receita, base=0.0):
@@ -505,7 +526,7 @@ def _serie(txt):
 def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=None,
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
              faixas=None, elast=None, ancora=None, cenario=None,
-             compart_modelo="exclusivo", captura=1.0,
+             compart_modelo="exclusivo", captura=1.0, modalidade="hibrido",
              colchao_meses=0, colchao_efic=0.0, produtos="", entradas=None,
              maturacao=None):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
@@ -583,7 +604,15 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         perda_frac = (max(0.0, wa - f["wa"]) * elast["wa"]
                       + max(0.0, sms - f["sms"]) * elast["sms"]
                       + max(0.0, email - f["email"]) * elast["email"])
-        rec_base = f["carteira_meta"] * f["meta"] * f["fator_desconto"]
+        # ⛔ Faixa com saldo e ZERO CPFs não recupera nada (15/09/2026). A conta antiga
+        # multiplicava carteira × meta sem olhar quantos CPFs há para trabalhar, e uma
+        # linha com R$ e nenhum CPF produzia recuperação sobre custo zero — R$ 720.000 no
+        # caso que a auditoria testou. Não é faixa barata: é entrada inconsistente (ou o
+        # CPF está noutra linha, ou o saldo foi digitado errado), e a conta tem de dizer
+        # isso em vez de devolver o melhor número possível.
+        sem_cpf = f["trabalhado"] <= 0 and f["carteira_meta"] > 0
+        rec_base = (0.0 if sem_cpf
+                    else f["carteira_meta"] * f["meta"] * f["fator_desconto"])
         # o colchão chega discando ou não: a perda de cadência e a escada de régua só
         # mordem o ACIONÁVEL. Cortar WhatsApp não atrasa parcela de acordo já firmado.
         # ⛔ O colchao so' existe aqui quando ele MUDA a conta, e isso acontece num caso
@@ -598,7 +627,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         acion = a["telecom"] + a["msg"] + a["crm"]
         lf.append(dict(
             **f, **{k: a[k] for k in ("telecom", "msg", "crm", "tent_esperada")},
-            acionamento=acion, rec_base=rec_base, perda_frac=perda_frac,
+            acionamento=acion, rec_base=rec_base, perda_frac=perda_frac, sem_cpf=sem_cpf,
             colchao_mes=colchao_mes, colchao_excede=colchao_bruto > rec_base + 1e-9,
             acionavel=acionavel, recuperado_novo=acionavel * (1 - perda_frac),
             perda=acionavel * perda_frac,
@@ -618,11 +647,12 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         af = _acionar(f["trabalhado"], f["regua"], telefones, f["wa"], f["sms"], f["email"],
                       realizacao, cenario)
         lf_fora.append(dict(
-            f, recuperado_potencial=f["carteira_meta"] * f["meta"] * f["fator_desconto"],
+            f, recuperado_potencial=(0.0 if f["trabalhado"] <= 0
+                                     else f["carteira_meta"] * f["meta"] * f["fator_desconto"]),
             acionamento_potencial=af["telecom"] + af["msg"] + af["crm"]))
     linhas = [
         ("Bot de voz",                 u * P["bot"],                          "Capacidade"),
-        ("Rateio do compartilhado",    max(P["rateio_piso"], cpfs * P["rateio_por_cpf"]) * P["compart"], "Capacidade"),
+        ("Rateio do compartilhado",    rateio_de(cpfs) * P["compart"],        "Capacidade"),
     ]
     if setup_mes:
         linhas.append(("Setup amortizado", setup_mes, "Capacidade"))
@@ -658,13 +688,40 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         l["por_real_novo"] = (l["custo"] / l["recuperado_novo"]) if l["recuperado_novo"] > 0 else None
         l["variavel"] = l["recuperado_coral"] * l["aliq"]
 
+    # ── a VARIÁVEL entra na conta (15/09/2026) ───────────────────────────────────────
+    # Duas correções da auditoria, e as duas saem do mesmo lugar: o que o credor paga não
+    # é o fixo, é a FATURA.
+    #
+    # (1) A âncora e o teto de R$ 0,30 por R$ 1 recuperado são os dois guardas contra
+    #     preço fora de mercado, e ambos conferiam só o fixo. No contrato de referência o
+    #     preço de R$ 8.464 passava folgado na âncora de R$ 12.000 enquanto o efetivo por
+    #     unidade era R$ 22.864 — 90% acima. Guarda que confere a metade menor da conta
+    #     não guarda nada.
+    # (2) O degrau de IRPJ é da PJ e a receita que cruza os R$ 62.500 inclui o success
+    #     fee. Cotando o fixo como se ele entrasse sozinho, a carga saía 17,93% onde a
+    #     real é 19,53% — R$ 31.751/ano de tributo subestimado a 30.000 CPFs, e o preço
+    #     2,6% abaixo do que deveria.
+    #
+    # `modalidade` declara o arranjo: no HÍBRIDO ADITIVO (§6.6, o modelo vigente) o credor
+    # paga fixo + variável, então a variável ocupa a faixa tributária ANTES do fixo e conta
+    # no que ele desembolsa. No VALOR FIXO ela não existe, e a conta volta a ser a antiga.
+    # ⚠️ A variável aqui é a da META. O gatilho move ±15% a alíquota, e é o `hibrido()` que
+    # abre os cenários — o preço se apoia na meta, não no melhor mês.
+    modalidade = str(modalidade or "hibrido").strip().lower()
+    if modalidade not in ("hibrido", "fixo"):
+        raise SystemExit(f"⛔ modalidade inválida ({modalidade!r}). Use hibrido | fixo.")
+    var_total = sum(l["variavel"] for l in lf)
+    var_fatura = var_total if modalidade == "hibrido" else 0.0
+    base_trib = receita_base + var_fatura
     if alvo is None:
         preco = preco or P["preco_ucc"]
     else:
-        preco = preco_do_alvo(custo_medido, u, alvo, receita_base)
+        preco = preco_do_alvo(custo_medido, u, alvo, base_trib)
     receita = u * preco
-    tributo = tributo_de(receita, receita_base)
+    tributo = tributo_de(receita, base_trib)
     liq = receita - tributo
+    fatura = receita + var_fatura
+    efetivo = fatura / u if u else 0.0
     return dict(
         uccs=u, cpfs=cpfs, preco=preco, receita=receita, liquida=liq,
         linhas=linhas, tel_med=tel_med,
@@ -678,6 +735,7 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         recuperado_novo=sum(l["recuperado_novo"] for l in lf),
         colchao_mes=sum(l["colchao_mes"] for l in lf),
         colchao_excede=[l["nome"] for l in lf if l["colchao_excede"]],
+        faixas_sem_cpf=[l["nome"] for l in lf if l["sem_cpf"]],
         colchao_meses=colchao_meses, colchao_efic=colchao_efic, colchao_ativo=colchao_ativo,
         # a meta que a cadeia medida implica, para conferir contra a que o credor informou
         meta_derivada={f["nome"]: meta_derivada(f["nome"]) for f in lf},
@@ -703,10 +761,12 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         # `fator_desconto` já entra no `rec_base`, então a conta estava certa — o que
         # faltava era o número aparecer ao lado da curva, que é onde alguém lê "R$ por mês"
         # e precisa saber de qual R$ se trata.
-        rec_face_total=sum(l["carteira_meta"] * l["meta"] for l in lf),
+        rec_face_total=sum(0.0 if l["sem_cpf"] else l["carteira_meta"] * l["meta"] for l in lf),
         desconto_efetivo=(1 - (sum(l["rec_base"] for l in lf)
-                               / sum(l["carteira_meta"] * l["meta"] for l in lf)))
-                          if sum(l["carteira_meta"] * l["meta"] for l in lf) else 0.0,
+                               / sum(0.0 if l["sem_cpf"] else l["carteira_meta"] * l["meta"]
+                                     for l in lf)))
+                          if sum(0.0 if l["sem_cpf"] else l["carteira_meta"] * l["meta"]
+                                 for l in lf) else 0.0,
         faixas_desconto_face=[l["nome"] for l in lf
                               if l["desconto"] > 0 and l["meta_base_valor"] == "face"],
         # desconto informado que NÃO abate nada — a taxa já era líquida. Não é erro, mas
@@ -720,13 +780,16 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         receita_base=receita_base, alvo=alvo,
         custo_medido=custo_medido,
         margem_medido=(liq - custo_medido) / receita if receita else 0.0,
-        equilibrio=preco_do_alvo(custo_medido, u, 0.0, receita_base),
-        rateio_frac=max(P["rateio_piso"], cpfs * P["rateio_por_cpf"]),
+        equilibrio=preco_do_alvo(custo_medido, u, 0.0, base_trib),
+        modalidade=modalidade, var_fatura=var_fatura, base_trib=base_trib,
+        fatura=fatura, efetivo=efetivo,
+        rateio_frac=rateio_de(cpfs),
+        rateio_no_teto=cpfs * P["rateio_por_cpf"] > 1.0,
         # o que o credor paga HOJE é a âncora que vale; sem isso, a genérica
         ancora=(ancora if ancora else P["ancora"]), ancora_propria=bool(ancora),
         **_restricao(preco, u, (ancora if ancora else P["ancora"]),
                      sum(l["recuperado"] for l in lf),
-                     sum(l["recuperado_novo"] for l in lf)),
+                     sum(l["recuperado_novo"] for l in lf), var_fatura),
         canais=canais_necessarios(cpfs, tent_esperada),
         regua_extrapolada=regua_fora_da_medida(regua),
         tent_contratada=tent_contratada, tent_esperada=tent_esperada, realizacao=r,
@@ -738,7 +801,21 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
                      [l["nome"] for l in lf if l.get("carteira_entrada_lacuna")],
                      compart_modelo, captura, colchao_ativo, lf_fora, serie_stat,
                      produtos or "", maturacao is not None),
-        ocupacao=cpfs / (u * P["tam_ucc"]),
+        # ── FIX 5 · a OCUPAÇÃO e o DEGRAU voltam para a superfície (15/09/2026) ────────
+        # Ocupação baixa não é prejuízo: com preço travado a margem SOBE (§6.9 f). O risco
+        # é o DEGRAU — um CPF a mais depois da unidade cheia abre outra unidade inteira.
+        # No contrato de referência, sair de 5.000 para 5.001 CPFs custa R$ 1.022 e cobra
+        # R$ 8.000: é a cláusula mais cara do contrato, e ela tinha saído da tela na
+        # reconstrução. Por isso a conta devolve quantos CPFs faltam para o degrau e o que
+        # ele move dos dois lados — é o número que a minuta precisa (unidades com aviso
+        # prévio, nunca ocupação).
+        ocupacao=cpfs / (u * P["tam_ucc"]) if u else 0.0,
+        degrau_cpfs=max(0, u * P["tam_ucc"] - cpfs),
+        degrau_receita=preco,
+        degrau_custo=(P["bot"]
+                      + ((custo_medido - capacidade) / cpfs if cpfs else 0.0)
+                      + (P["rateio_por_cpf"] * P["compart"]
+                         if P["rateio_piso"] < cpfs * P["rateio_por_cpf"] < 1.0 else 0.0)),
     )
 
 
@@ -811,6 +888,7 @@ def sensibilidade_regua(reguas=None, voz=None, **kw):
     base = calcular(**kw)
     preco_base, u = base["preco"], base["uccs"]
     alvo, rb = kw.get("alvo"), kw.get("receita_base", 0.0)
+    modalidade = str(kw.get("modalidade") or "hibrido").strip().lower()
     if reguas is None:
         reguas = escada_regua(regua_base)
 
@@ -833,14 +911,21 @@ def sensibilidade_regua(reguas=None, voz=None, **kw):
         receita = u * preco_base
         liq = receita - tributo_de(receita, rb)
         liq_var = (receita + var) - tributo_de(receita + var, rb)
+        # a escada repetia os mesmos dois furos da conta principal (auditoria 15/09): o
+        # preço do alvo nascia como se o fixo entrasse sozinho na faixa tributária, e o
+        # teto da régua comparava esse fixo com a âncora. Aqui a régua move a variável
+        # degrau a degrau, então o erro cresce junto com a discagem.
+        var_fat = var if modalidade == "hibrido" else 0.0
+        p_alvo = (preco_do_alvo(c["custo_medido"], u, alvo, rb + var_fat)
+                  if alvo is not None else None)
         return dict(
             regua=rg, realizacao=c["realizacao"], tent_esperada=c["tent_esperada"],
             custo=c["custo_medido"], telecom=c["tel_med"],
             recuperado=rec, variavel=var,
             resultado=liq - c["custo_medido"],
             resultado_var=liq_var - c["custo_medido"],
-            preco_alvo=(preco_do_alvo(c["custo_medido"], u, alvo, rb)
-                        if alvo is not None else None),
+            preco_alvo=p_alvo,
+            efetivo_alvo=(p_alvo + var_fat / u) if (p_alvo is not None and u) else None,
         )
 
     ref = rodar(regua_base)
@@ -893,7 +978,10 @@ def veredito_regua(voz=None, reguas=None, **kw):
 
     def cabe(rg):
         l = sensibilidade_regua(reguas=[rg], voz=voz, **kw)[0]
-        return (l["preco_alvo"] <= ancora) if alvo is not None else (l["resultado"] >= 0)
+        # ⛔ compara o EFETIVO com a âncora (15/09): o credor desembolsa fixo + variável, e
+        # subir a régua move os dois. Contra o fixo sozinho o veredito autorizava régua que
+        # a fatura não comporta.
+        return (l["efetivo_alvo"] <= ancora) if alvo is not None else (l["resultado"] >= 0)
 
     lo, hi = 0.5, 20.0
     if not cabe(lo):
@@ -1193,7 +1281,7 @@ def premio_risco(**kw):
                 pontos=base["margem_medido"] - pes["margem_medido"])
 
 
-def _restricao(preco, u, ancora, recuperado, recuperado_novo=None):
+def _restricao(preco, u, ancora, recuperado, recuperado_novo=None, variavel=0.0):
     """Qual das três restrições está MORDENDO — e por quanto.
 
     As três não são do mesmo tipo, e confundi-las é o erro comum:
@@ -1203,9 +1291,16 @@ def _restricao(preco, u, ancora, recuperado, recuperado_novo=None):
     preço cabe nos dois tetos, quem manda é a própria margem alvo — e aí há folga para
     desconto, que é exatamente a leitura que o comercial precisa antes de negociar.
 
+    ⛔ **Os tetos conferem o EFETIVO, não o fixo** (15/09/2026). Até a auditoria os dois
+    comparavam o preço da unidade, que é só a parcela fixa; o credor desembolsa fixo +
+    variável. No contrato de referência isso deixava passar um efetivo de R$ 22.864 por
+    unidade contra uma âncora de R$ 12.000, e media R$ 0,035 por R$ 1 recuperado onde o
+    real é R$ 0,095. Sob `modalidade="fixo"` a variável é zero e nada muda.
+
     O teto por R$ 1 só existe com recuperação informada; sem ela devolve `None` em vez
     de zero, porque "não sabemos" e "não fura" são coisas diferentes.
     """
+    efetivo = preco + (variavel / u if u else 0.0)
     teto_r = (P["teto_por_real"] * recuperado / u) if (recuperado > 0 and u) else None
     # ── a MESMA conta sobre a recuperação NOVA (parecer 14/09, item `tetonovo`) ──
     # O teto de R$ 0,30 é leitura do CREDOR: ele olha tudo que entrou, colchão incluído.
@@ -1216,17 +1311,21 @@ def _restricao(preco, u, ancora, recuperado, recuperado_novo=None):
     rn = recuperado if recuperado_novo is None else recuperado_novo
     teto_novo = (P["teto_por_real"] * rn / u) if (rn > 0 and u) else None
     extra = dict(teto_por_real_novo=teto_novo,
-                 folga_por_real_novo=(teto_novo - preco) if teto_novo else None,
-                 colchao_segura_o_teto=bool(teto_r and teto_novo and preco <= teto_r
-                                            and preco > teto_novo))
+                 restricao_efetivo=efetivo,
+                 # o quanto a variável acrescenta ao que o credor paga por unidade: é a
+                 # diferença entre o que a conta media antes e o que ela mede agora
+                 restricao_variavel_un=efetivo - preco,
+                 folga_por_real_novo=(teto_novo - efetivo) if teto_novo else None,
+                 colchao_segura_o_teto=bool(teto_r and teto_novo and efetivo <= teto_r
+                                            and efetivo > teto_novo))
     tetos = [("ancora", ancora)] + ([("teto_por_real", teto_r)] if teto_r else [])
-    furados = [(k, v) for k, v in tetos if preco > v]
+    furados = [(k, v) for k, v in tetos if efetivo > v]
     if furados:
         k, v = min(furados, key=lambda x: x[1])
-        return dict(restricao=k, restricao_teto=v, restricao_folga=v - preco, **extra)
+        return dict(restricao=k, restricao_teto=v, restricao_folga=v - efetivo, **extra)
     menor = min(v for _, v in tetos)
     return dict(restricao="margem_alvo", restricao_teto=menor,
-                restricao_folga=menor - preco, **extra)
+                restricao_folga=menor - efetivo, **extra)
 
 
 FICHA_LINHAS = (
@@ -1304,6 +1403,20 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
           f"**canais**, e a conta é outra. A régua 2 pede 1,4 canal por unidade e a régua 10 "
           f"pede 7,2 — **5× de amplitude dentro do mesmo tamanho vendido**. Enquanto o de-para "
           f"não fecha, o 2.500 é número comercial sem contrapartida operacional.")
+    if c["faixas_sem_cpf"]:
+        A("")
+        A("> ⚠️ **Faixa com saldo e ZERO CPFs** em "
+          + ", ".join(f"**{n}**" for n in c["faixas_sem_cpf"])
+          + ". Ela entrou na conta recuperando **nada**: sem CPF não há quem trabalhar, e "
+            "carteira × meta sobre uma linha vazia produzia recuperação em cima de custo "
+            "zero. Ou o CPF está noutra faixa, ou o saldo foi digitado errado — confira "
+            "antes de levar o número.")
+    if c["rateio_no_teto"]:
+        A("")
+        A(f"> ⚠️ **Rateio no teto.** Esta carteira sozinha cobre os "
+          f"{br(P['compart'])} do compartilhado inteiro. A fração cresce 1% a cada 1.000 "
+          f"CPFs e está **limitada a 100%** — acima de {num(100_000)} CPFs o contrato não "
+          f"paga mais do que existe para ratear.")
     if c["regua_extrapolada"]:
         e = c["regua_extrapolada"]
         A("")
@@ -1634,7 +1747,10 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
         base_l = next((l for l in escada if l["base"]), escada[0])
         acima = [l for l in escada if l["regua"] > base_l["regua"]]
         A("")
-        if acima and tem_rec:
+        # `por_real` é None quando o degrau não move o custo (régua igual à base, ou
+        # carteira sem telecom a acrescentar) — dividir ali seria 0÷0. A conta devolve None
+        # de propósito; quem renderiza é que não podia formatar sem olhar.
+        if acima and tem_rec and acima[0]["por_real"] is not None:
             pa = acima[0]
             A(f"> Subir a régua de **{num(base_l['regua'], 0)}** para **{num(pa['regua'], 0)}** "
               f"custa **{br(pa['d_custo'])}/mês** e devolve **{br(pa['d_recuperado'])}** de "
@@ -1698,7 +1814,11 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
     equil = c["equilibrio"]
     A("| Referência | Valor | Leitura |")
     A("|---|--:|---|")
-    A(f"| Preço por unidade | {br(c['preco'])} | |")
+    A(f"| Preço por unidade | {br(c['preco'])} | a parcela FIXA |")
+    if c["restricao_variavel_un"] > 0:
+        A(f"| Variável por unidade | {br(c['restricao_variavel_un'])} | na meta observada |")
+        A(f"| **Efetivo por unidade** | **{br(c['restricao_efetivo'])}** | "
+          "é este que os tetos conferem |")
     A(f"| Equilíbrio por unidade | {br(equil)} | preço que zera a conta |")
     A(f"| Âncora de mercado | {br(c['ancora'])} | "
       + ("o que o credor paga hoje |" if c["ancora_propria"]
@@ -1708,23 +1828,33 @@ def planilha(c, recuperacao=None, fee=None, cliente="—", obs=None, cenarios=No
     A("")
     rot_r = {"ancora": "a âncora", "teto_por_real": "o teto por R$ 1 recuperado",
              "margem_alvo": "a margem alvo"}[c["restricao"]]
-    if c["restricao_folga"] < 0:
-        A(f"> ⛔ **Restrição ativa: {rot_r}.** O preço está "
+    furou = c["restricao_folga"] < 0
+    # ⛔ Os dois tetos conferem o EFETIVO (fixo + variável), não o fixo — auditoria 15/09.
+    # O texto tem de dizer qual número está sendo comparado, senão quem lê confere o
+    # preço da unidade contra um limite que não é sobre ele.
+    _ef = c["restricao_efetivo"]
+    _un = c["restricao_variavel_un"]
+    _abre = (f"efetivo de {br(_ef)} por unidade"
+             + (f" (fixo {br(c['preco'])} + variável {br(_un)})" if _un > 0 else ""))
+    if furou:
+        A(f"> ⛔ **Restrição ativa: {rot_r}.** O {_abre} está "
           f"**{br(-c['restricao_folga'])} acima** do teto de {br(c['restricao_teto'])}. "
           "É este número que precisa ceder — não o próximo desconto.")
     elif c["restricao"] == "margem_alvo":
-        A(f"> ✅ **Restrição ativa: a margem alvo.** O preço cabe nos dois tetos, com "
+        A(f"> ✅ **Restrição ativa: a margem alvo.** O {_abre} cabe nos dois tetos, com "
           f"**{br(c['restricao_folga'])} de folga** até o mais baixo ({br(c['restricao_teto'])}). "
           "É o espaço que existe para desconto.")
     else:
-        A(f"> **Restrição ativa: {rot_r}** — {br(c['restricao_folga'])} de folga.")
+        A(f"> **Restrição ativa: {rot_r}** — {br(c['restricao_folga'])} de folga sobre o "
+          f"{_abre}.")
     if c.get("teto_por_real_novo"):
         A("")
         A(f"> **O mesmo teto, medido pelo que depende de nós:** o R$ 0,30 por R$ 1 é leitura "
           f"do CREDOR e inclui o colchão, que é acordo de outra assessoria. Sobre a "
           f"recuperação **NOVA** o teto cai para **{br(c['teto_por_real_novo'])}** por unidade"
-          + (f" — e o preço de {br(c['preco'])} **passa dele**." if c["colchao_segura_o_teto"]
-             else f", com {br(c['folga_por_real_novo'])} de folga.")
+          + (f" — e o efetivo de {br(c['restricao_efetivo'])} **passa dele**."
+             if c["colchao_segura_o_teto"]
+             else f", com {br(c['folga_por_real_novo'])} de folga sobre o efetivo.")
           + (" ⛔ **Uma carteira com colchão grande passa no teto do credor por mérito alheio.**"
              if c["colchao_segura_o_teto"] else ""))
     if equil > c["preco"]:
