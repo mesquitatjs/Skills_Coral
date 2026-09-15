@@ -150,6 +150,97 @@ MATURACAO = (0.416, 0.517, 0.600, 0.682, 0.761, 0.840, 0.917, 0.931, 0.946, 0.95
 CUMPRIMENTO_AVISTA = 0.331
 
 
+# ── A CADEIA DO COLCHAO, MEDIDA POR FAIXA (Principia, set/2026) ──────────────────
+# Ate aqui o colchao era ENTRADA: o credor declarava saldo a vencer, prazo e eficiencia.
+# Isso resolve o colchao HERDADO e pula a cadeia que o PRODUZ — e essa cadeia a operacao
+# mede. Sonda: `principia-acionamento/scripts/_q_colchao_faixa.py` (mailing 06-09/2026,
+# safras desde jan/2025).
+#
+#     recuperacao da faixa = carteira x conversao x (1 - desconto) x cumprimento
+#     colchao              = recuperacao x `colchao`      (vem de safra anterior)
+#     nova                 = recuperacao x `entra_no_mes`
+#
+# `entra_no_mes` = soma(w_k / k) com os pesos de parcela DAQUELA faixa: um acordo de k
+# parcelas entrega 1/k no mes em que fecha. Carteira velha parcela mais (3,64 -> 8,01) e
+# cumpre menos (44,9% -> 17,7%), entao a media global apagava a diferenca que decide o
+# numero.
+#
+# ⚠️ TRES RESSALVAS, e a primeira invalida uma coluna:
+#   1. DESCONTO nao e' mensuravel por esta fonte. O denominador e' o `debt_amount` do
+#      mailing, que carrega juros e multa que o acordo tambem cobra: 13% a 30% dos
+#      acordos ficam ACIMA da divida de referencia e o "desconto" sai NEGATIVO em 01-30
+#      (-3,7%). O valor entra como ~0 e a tela marca lacuna. Pedir ao credor.
+#   2. CONVERSAO e' por CASO e a carteira e' em R$. Aplicar uma sobre a outra supoe que
+#      quem fecha acordo tem o ticket medio da faixa. Premissa declarada, nao medida.
+#   3. CUMPRIMENTO so' sai de coorte MADURA (safra + k meses <= fim). Na imatura o mesmo
+#      numero da' 0,2% a 5,4% por CENSURA — o BROKEN chega na 1a parcela e o KEPT so' na
+#      ultima. E CANCELED fica fora dos dois: no 361+ ele e' 80,2% do R$ prometido.
+#
+# ⚠️ Sao numeros da operacao da Principia (PF, educacional, voz). Entram como default
+#    MEDIDO e editavel — credor com outro perfil tem outra curva.
+PRINCIPIA_FAIXA = {
+    #          conversao  parcelas  desconto  cumprimento  entra_no_mes
+    "01-30":   (0.0203,   3.64,     0.0,      0.449,       0.694),
+    "31-60":   (0.0192,   4.41,     0.0,      0.260,       0.591),
+    "61-90":   (0.0185,   5.51,     0.0,      0.235,       0.522),
+    "91-180":  (0.0161,   7.38,     0.0,      0.253,       0.298),
+    "181-360": (0.0125,   8.01,     0.0,      0.233,       0.217),
+    "361+":    (0.0037,   7.60,     0.0,      0.177,       0.373),
+}
+_FX_TETO = (("01-30", 30), ("31-60", 60), ("61-90", 90), ("91-180", 180),
+            ("181-360", 360), ("361+", 10 ** 9))
+
+
+def faixa_medida(nome):
+    """Casa o nome da faixa do credor com a faixa MEDIDA, pelo teto do intervalo.
+
+    O discovery pede 06-30 … +720 e a medicao sai em 6 faixas; casar por texto exigiria
+    que o credor usasse os nossos rotulos. O teto e' o que define onde a faixa cai:
+    "91-120" tem teto 120 e mora dentro de 91-180.
+    """
+    t = "".join(ch if ch.isdigit() else " " for ch in str(nome or ""))
+    nums = [int(x) for x in t.split() if x]
+    if not nums:
+        return None
+    teto = max(nums)
+    if "+" in str(nome) and len(nums) == 1:
+        teto = max(teto, 361)
+    for chave, lim in _FX_TETO:
+        if teto <= lim:
+            return chave
+    return "361+"
+
+
+def elos_da_faixa(nome):
+    """Os quatro elos medidos da faixa, como dict. `None` quando o nome nao resolve."""
+    k = faixa_medida(nome)
+    if not k:
+        return None
+    c, p, d, u, m = PRINCIPIA_FAIXA[k]
+    return dict(chave=k, conversao=c, parcelas=p, desconto=d, cumprimento=u,
+                entra_no_mes=m, colchao=1 - m)
+
+
+def colchao_derivado(nome, rec_base):
+    """Colchao da faixa a partir da recuperacao dela — sem saldo declarado.
+
+    Nao acrescenta recuperacao: PARTE a que ja existe entre o que vem de safra anterior
+    e o que depende de fechar acordo novo neste mes.
+    """
+    e = elos_da_faixa(nome)
+    return (rec_base or 0.0) * e["colchao"] if e else 0.0
+
+
+def meta_derivada(nome):
+    """A meta que a cadeia medida implica para a faixa: % da carteira recuperado no mes.
+
+    Serve de CONFERENCIA contra a taxa que o credor informou — divergencia grande e'
+    sinal de perfil diferente (ou de denominador diferente), nao de erro de conta.
+    """
+    e = elos_da_faixa(nome)
+    return e["conversao"] * (1 - e["desconto"]) * e["cumprimento"] if e else None
+
+
 def maturacao_de(mat=None, meses=12):
     """Normaliza o vetor de maturação: monótono, dentro de [0,1], estendido até `meses`.
 
@@ -426,7 +517,8 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
              alvo=None, receita_base=0.0, setup=0.0, setup_meses=12, pas=0, pa_custo=None,
              faixas=None, elast=None, ancora=None, cenario=None,
              compart_modelo="exclusivo", captura=1.0,
-             colchao_meses=0, colchao_efic=0.0, produtos="", entradas=None,
+             colchao_meses=0, colchao_efic=0.0, colchao_modo="derivado",
+             produtos="", entradas=None,
              maturacao=None):
     pa_custo = P["pa_humana"] if pa_custo is None else pa_custo
     elast = elast or ELAST
@@ -506,7 +598,14 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         rec_base = f["carteira_meta"] * f["meta"] * f["fator_desconto"]
         # o colchão chega discando ou não: a perda de cadência e a escada de régua só
         # mordem o ACIONÁVEL. Cortar WhatsApp não atrasa parcela de acordo já firmado.
-        colchao_bruto = (f["colchao"] / colchao_meses * colchao_efic) if colchao_ativo else 0.0
+        # DERIVADO (default) tira o colchao da cadeia medida na faixa; DECLARADO usa o
+        # saldo que o credor informou. O derivado nao precisa de saldo nenhum — e' por
+        # isso que ele e' o default: o credor quase nunca tem o saldo a vencer aberto por
+        # faixa, e sem ele o colchao inteiro sumia da conta.
+        if colchao_modo == "declarado":
+            colchao_bruto = (f["colchao"] / colchao_meses * colchao_efic) if colchao_ativo else 0.0
+        else:
+            colchao_bruto = colchao_derivado(f["nome"], rec_base)
         colchao_mes = min(colchao_bruto, rec_base)
         acionavel = rec_base - colchao_mes
         acion = a["telecom"] + a["msg"] + a["crm"]
@@ -566,7 +665,16 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         l["por_real"] = (l["custo"] / l["recuperado"]) if l["recuperado"] > 0 else None
         # o custo é INTEGRAL (discamos a base toda); só a recuperação é disputada
         # a NOVA é o que depende de nós; a variável cobra sobre ela, não sobre acordo alheio
-        l["recuperado_coral"] = l["recuperado_novo"] * captura
+        # ⛔ SÃO DOIS COLCHOES, e a variavel trata cada um ao CONTRARIO do outro.
+        # O HERDADO (saldo que o credor declara) e' acordo de OUTRA assessoria: chega
+        # cheio, nao matura, e a Coral nao cobra. O PROPRIO (derivado da cadeia) e' o que
+        # NOS fechamos e que continua pingando — a parcela de outubro do acordo de maio e'
+        # recuperacao nossa, atrasada, e a Coral COBRA. Em regime, tira-la da base
+        # cortaria a variavel em 30% a 78% conforme a faixa, contra nos, e o erro
+        # cresceria com a idade da carteira.
+        l["cobravel"] = (l["recuperado_novo"] if colchao_modo == "declarado"
+                         else l["recuperado"])
+        l["recuperado_coral"] = l["cobravel"] * captura
         l["por_real_novo"] = (l["custo"] / l["recuperado_novo"]) if l["recuperado_novo"] > 0 else None
         l["variavel"] = l["recuperado_coral"] * l["aliq"]
 
@@ -591,6 +699,10 @@ def calcular(cpfs, regua, wa, sms, email, telefones=1.0, realizacao=None, preco=
         colchao_mes=sum(l["colchao_mes"] for l in lf),
         colchao_excede=[l["nome"] for l in lf if l["colchao_excede"]],
         colchao_meses=colchao_meses, colchao_efic=colchao_efic, colchao_ativo=colchao_ativo,
+        colchao_modo=("declarado" if colchao_modo == "declarado" else "derivado"),
+        cobravel=sum(l["cobravel"] for l in lf),
+        # a meta que a cadeia medida implica, para conferir contra a que o credor informou
+        meta_derivada={f["nome"]: meta_derivada(f["nome"]) for f in lf},
         maturacao=mat, colchao_proprio_frac=colchao_proprio_frac,
         colchao_proprio=sum(l["proprio_contratado"] for l in lf),
         maturacao_propria=maturacao is not None,
