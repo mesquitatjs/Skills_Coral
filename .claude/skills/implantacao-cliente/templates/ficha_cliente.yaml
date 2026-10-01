@@ -1,0 +1,106 @@
+# Ficha de implantação de cliente — preenchida na Fase 1 da skill `implantacao-cliente`.
+# Uma ficha por cliente, salva em projetos_coral/<chave>/FICHA_IMPLANTACAO.yaml.
+# Campo desconhecido = null + entrada em `pendencias` (nunca inventar valor).
+# Exemplo preenchido: a Bull (implantada set–out/2026).
+
+cliente:
+  chave: bull                 # minúsculas, sem acento — vira chave em dicts (clientes_telecom, coral_tema, meta_telecom…)
+  CHAVE: BULL                 # maiúsculas — chave das campanhas no coral-bot e filtro ILIKE '%BULL%'
+  nome: Bull                  # nome exibido (painéis, Slack "[Bull]")
+  cor: "#F472B6"              # cor fixa; não pode colidir com segmento (ouro/bronze/ppay/fidc), semáforo nem coral
+  produto: consignado CLT     # descrição curta (aba do Coral Desk, ex.: "consignado · sem leitura")
+  inicio_operacao: "2026-10-05"   # 1º dia de discagem real (alertas, orçamento, Home ficam neutros antes)
+  inicio_mailing: "2026-10-02"    # 1º lote cobrado pelo status do mailing
+  contatos:
+    cliente: [Nilton (gestor de cobrança)]
+    coral: [Bia (comercial), Bernardo (integração)]
+    fornecedor: [Doug, Pedro (SinergyTech)]
+
+comercial:
+  modelo: "MAX(mínimo; success fee)"   # fixo | success fee | híbrido | 100% variável
+  minimo_mensal: 16000.00             # null se 100% variável
+  comissao:                           # tabela por faixa de atraso (dias) → %; coluna aplicada
+    coluna: sem_transbordo
+    faixas: [[30, 6], [60, 9], [90, 10], [120, 15], [180, 20], [360, 25], [720, 30], [1080, 35], [1800, 40], [999999, 45]]
+  reembolso_telecom: false            # false = custo REAL do carrier; true = contratual R$0,053/min repassado
+  precificacao_doc: projetos_coral/bull/BULL_PROJETO.md   # saída da skill ucc-precificacao
+
+discador:
+  plataforma: OCS SinergyTech
+  campanhas:                          # uma linha por campanha no discador
+    - chave: BULL
+      cpn: "1824"
+      rotulo: "HIB - BULL (CORAL AI)" # nome exato no OCS (regex do baixar_mailing / ILIKE do acionamento)
+      segmento: null                  # segmento interno, se o cliente tiver mais de uma campanha
+  bots: 2
+  canais: 16
+  operada: false                      # false = OBSERVADA (Control Desk só enxerga); true = entra em pausa/spin/rota
+  regua_spin: null                    # tentativas/CPF/dia; null = sem pacing de spin (só pacing por custo)
+  desfechos_acordo: ["2462", "2461", "2463"]
+  desfechos_acordo_extra: ["1275"]    # exclusivos da campanha (ACORDO_IDS_EXTRA)
+  janela: {seg_sex: "08:00-20:40", sab: "08:00-14:20", dom: null}
+  opera_facultativo: true             # facultativo/estadual roda; só feriado NACIONAL para
+
+telecom:
+  carrier: Vonex
+  techprefix: 647884                  # próprio do cliente (checagem cruzada); null se compartilha
+  techprefix_desde: "2026-10-01"
+  conta_carrier: [100777, 100778]     # se for outra conta, a captura precisa de credencial nova
+  orcamento_mensal: 2372.00           # R$/mês; null = sem orçamento (sem pacing por custo)
+  custo_base: real                    # real | contratual
+  mes_inicio_proporcional: true
+
+mailing:
+  entrega: portal OCS (lote.aspx)     # portal OCS | e-mail | SFTP | API
+  arquivo: "Mailing_DDMM_bull.csv"
+  sufixo: _bull
+  nome_lote_contem: bull              # termo obrigatório no nome do lote
+  separador: ";"
+  decimal: virgula
+  colunas:                            # coluna do arquivo → coluna canônica do loader
+    CPF: CPF
+    DATA_NASC: DATA_NASC
+    CASE_ID: ID_DIVIDA
+    PRODUTO_CANONICO: PRODUTO
+    VALOR_ATUALIZADO: VALOR_DIVIDA
+    DIAS_ATRASO: AGING
+    SEGMENTO: SEGMENTO
+    VALOR_ORIGINAL: VALOR_ORIGINAL
+    QTD_PAGAS: QTD_PAGAS
+  opcionais: [VALOR_ORIGINAL, QTD_PAGAS]
+  segmentos: [QUEBRA_DE_VINCULO, ESCRITURADO, NAO_ESCRITURADO]
+  frequencia: diaria
+  tem_plano: false                    # true só se entrar no planejador (régua + meta contratada)
+
+dados:
+  bq_portfolio_id: 677ae1c3-c97f-47cd-b42b-a8b8f71f39da
+  bq_sub_portfolios: {d7201ca8-2189-4fe7-9a19-9bb7c0d79ee5: Bull Catch All}
+  sistema_cliente: CobranSaaS (Cobrançado)   # onde baixa/registro de pagamento acontece
+
+mensageria:
+  whatsapp: {usa: true, categorias: [utility], hsm_doc: projetos_coral/bull/SUBMISSAO_HSM_Meta.md}
+  sms: {usa: true}
+  email: {usa: true}
+  cadencia: "WA 2 · SMS 3 · e-mail 0,5 por CPF/mês"
+
+custos_internos:
+  bot_preco_mes: 1020.00              # R$/bot/mês
+  preco_wa: {utility: 0.15, marketing: 0.55}
+  preco_sms: 0.06
+  preco_email: 0.04
+
+paineis:
+  operacional_proprio: true           # painel operacional separado (cliente + interno)
+  versao_cliente: true                # existe link que pode ir ao cliente
+  projeto_vercel_cliente: bull-operacional
+  projeto_vercel_interno: bull-int-7q4x2c   # nome não óbvio + senha da Home
+  rodizio_tv_ms: 60000
+
+alertas:
+  canal: "#control-desk"
+  tecnicos_desde: "2026-10-05"
+  relativos_desde: "2026-10-26"      # inicio + 21 dias (janela dos baselines)
+  mailing_desde: "2026-10-05"
+
+pendencias:
+  - "Linha de WhatsApp da Coral para a Bull (BULL_PROJETO §8.1 #2)"
