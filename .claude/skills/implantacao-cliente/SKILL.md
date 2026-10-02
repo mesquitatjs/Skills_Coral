@@ -85,7 +85,7 @@ Monte o pacote a partir da ficha e do `references/inventario.md`. Cada módulo e
 | **M6 · Tema e Home** | sempre | #9, #11–13 |
 | **M7 · Painéis existentes** | sempre | Telecom (#2, #5), TMA (#10), QA (#14), Coral Desk (#44–46) |
 | **M8 · Operacional próprio** (externo + interno) | `paineis.operacional_proprio` | #15. Copie o gerador da Bull trocando as constantes, ou, se já houver 2 cópias, proponha generalizar para `gerar_operacional_cliente.py --cliente <chave>` |
-| **M9 · Alertas** | sempre | #19 (fases), #20, #42; canal #control-desk com `[Nome]` |
+| **M9 · Alertas** | sempre | #19 (fases), #20, #42; canal #control-desk com `[NOME]` |
 | **M10 · Documentação e checagens** | sempre | ver Fase 6 |
 
 Apresente o pacote assim:
@@ -141,7 +141,7 @@ Cuidados que costumam ser esquecidos:
 - a abertura do pacing (🌅 no Slack);
 - os canais = contratado;
 - o 1º lote de mailing cobrado;
-- os alertas técnicos com `[Nome]`.
+- os alertas técnicos com `[NOME]`.
 
 **Agende checagens** com `send_later`, cada uma com o que conferir escrito na mensagem:
 

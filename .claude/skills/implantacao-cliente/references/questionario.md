@@ -18,7 +18,7 @@ Cada pergunta preenche um campo da ficha (`templates/ficha_cliente.yaml`) e diz 
 
 | # | Pergunta | Campo | Classe | Por que importa |
 |---|---|---|---|---|
-| A1 | Nome do cliente como deve aparecer nos painéis e no Slack? | `cliente.nome` | B | rótulo `[Nome]`, abas, cards |
+| A1 | Nome do cliente como deve aparecer nos painéis e no Slack? | `cliente.nome` | B | rótulo `[NOME]`, abas, cards |
 | A2 | Chave curta (minúsculas, sem acento)? Sugira a partir do nome | `cliente.chave` / `CHAVE` | B | chave em ~45 pontos de cadastro e no `ILIKE '%CHAVE%'`: precisa ser **única no rótulo** das campanhas |
 | A3 | Data do 1º dia de discagem real? | `cliente.inicio_operacao` | B | alertas técnicos, orçamento proporcional, Home neutra, pacing |
 | A4 | Data do 1º lote de mailing que deve ser cobrado? | `cliente.inicio_mailing` | I (= início − 3 dias úteis) | status `completo_<chave>` e heartbeat |
@@ -99,7 +99,7 @@ Cada pergunta preenche um campo da ficha (`templates/ficha_cliente.yaml`) e diz 
 |---|---|---|---|---|
 | I1 | Os alertas técnicos começam no início da operação? | `alertas.tecnicos_desde` | I (= início) | `campanhas.ALERTAS.desde` |
 | I2 | Período de medição antes dos alertas **relativos**? | `alertas.relativos_desde` | I (início + 21 dias) | baselines precisam de 21 dias. Antes disso o alerta relativo é ruído |
-| I3 | Canal dos alertas? | `alertas.canal` | I (#control-desk com `[Nome]`) | um canal único com rótulo, não um canal por cliente |
+| I3 | Canal dos alertas? | `alertas.canal` | I (#control-desk com `[NOME]`) | um canal único com rótulo, não um canal por cliente |
 | I4 | Alerta de lote do mailing não entregue a partir de quando? | `alertas.mailing_desde` | I (= início) | heartbeat 🟠 não crítico |
 
 ---

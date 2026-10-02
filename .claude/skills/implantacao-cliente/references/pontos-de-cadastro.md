@@ -41,7 +41,7 @@ Para cada ponto, a coluna "Se faltar" diz o que acontece. Quase sempre é silên
 | 17 | `scripts/campanhas.py` · `CAMPANHAS` | `"BULL": {"cpn": "1824", "cliente": "bull"}` | o bot não enxerga a campanha. É a fonte de `CAMP_IDS`, `TODAS`, `OPERADAS`, e a **chave** vira o `ILIKE '%BULL%'` do pacing | ✔ |
 | 18 | `campanhas.py` · `OBSERVADAS` | `{"BULL"}` | ⛔ sem isso, o bot **atua** no discador do cliente (pausa por spin, StopLote, troca de rota) sem régua acordada | ✔ |
 | 19 | `campanhas.py` · `ALERTAS` | `{"desde": "2026-10-05", "relativos_desde": "2026-10-26"}` | ⛔ sem isso, alerta **tudo e sempre**: inclusive relativos sem baseline, ou seja, ruído no 1º dia | ✔ |
-| 20 | `scripts/slack_texto.py` · `NOMES` | `"BULL": "Bull"` | alerta sem o rótulo `[Bull]` | ✔ |
+| 20 | `scripts/slack_texto.py` · `NOMES` | `"BULL": "Bull"` | alerta sem o tag `[BULL]` | ✔ |
 | 21 | `scripts/monitor_campanhas.py` · `CASE` do `_FUNIL_SQL` | `WHEN campanha ILIKE '%BULL%' THEN 'BULL'` | ✋ escrito à mão: sem funil e sem `bi_snapshots` do cliente | ✔ |
 | 22 | `scripts/pacing_custo.py` · `ORCAMENTO_CLIENTE` | `"BULL": {"cliente": "bull", "mensal": 2372.00, "inicio": "2026-10-05", "canais": 16, "bots": 2}` | sem pacing por custo, sem abertura por custo e sem alertas de orçamento e capacidade. ⚠️ Constantes globais herdadas: `SAB_FATOR`, `K_TENT_PADRAO = 0.02` e `THR_CANAL_H = 150`, este último calibrado para TMA de ~2 min. Revisar para cada cliente | ✔ |
 | 23 | `scripts/qa_acordos/ocs_lib.py` · `CAMPANHAS` | `"1824": "Bull"` | o juiz de QA não coleta os acordos do cliente | ✔ |
@@ -68,7 +68,7 @@ Para cada ponto, a coluna "Se faltar" diz o que acontece. Quase sempre é silên
 | 39 | `ingest_mailing.py` · `col_map` / `_COLUNAS_NOVAS` | `segmento`, `valor_original`, `qtd_pagas` | ✋ coluna nova = ALTER idempotente aqui | — |
 | 40 | `scripts/mailing_status.py` · `ESPERADOS_<CHAVE>`, `<CHAVE>_DESDE` (saída `completo_<chave>`) | `["bull"]` · `"2026-10-02"` | o status não cobra o lote. ⛔ O cliente fica **fora** do gate `completo` da Principia | ✔ |
 | 41 | `.github/workflows/coralai-mailing-ingest.yml` · passos do cliente | `--campanha BULL` · `--apenas _bull` · `!cancelled()` | ✋ passos próprios; falha do cliente não pode derrubar a Principia | ✔ |
-| 42 | `scripts/heartbeat.py` · `<CHAVE>_ALERTA_DESDE` + check `[Nome] Mailing` | `"2026-10-05"` | ✋ sem alerta de lote não entregue (🟠, não crítico) | ✔ |
+| 42 | `scripts/heartbeat.py` · `<CHAVE>_ALERTA_DESDE` + check `[NOME] Mailing` | `"2026-10-05"` | ✋ sem alerta de lote não entregue (🟠, não crítico) | ✔ |
 | 43 | `scripts/estrategia_common.py` · `_SEGMENTOS_<CHAVE>` | `["QUEBRA_DE_VINCULO","ESCRITURADO","NAO_ESCRITURADO"]` | ✋ a Base do dia sai sem ordem de segmento | — |
 | 44 | `dashboard/agentes.js` · `NOME_CAMP`, `RODIZIO_MS`, `BASE_SEG` | `BULL:'Bull'` · `bull: 60000` · rótulos/SPT por segmento | sem nome, rodízio padrão de 15 s, e a Base sem rótulo | ✔ (2 de 3) |
 | 45 | `dashboard/agentes_tv.html` + `agentes_m.html` · aba `data-cli`, cor, logo, texto "sem leitura" | `data-cli="bull"`, `#F472B6`, `'consignado · sem leitura'` | ✋ não aparece aba do cliente. A cor está **escrita à mão** em vários seletores | ✔ (aba) |
@@ -86,6 +86,6 @@ Para cada ponto, a coluna "Se faltar" diz o que acontece. Quase sempre é silên
 | BigQuery | `portfolio_id` (e sub-portfólios) do cliente em `intermediate.dim_portfolio` |
 | Vercel | projetos do Operacional (cliente + interno com nome não óbvio). A senha do interno é a `HOME_SENHA` |
 | cron-job.org | job novo só se houver rotina agendada própria do cliente (`config/cron_jobs.json` do principia-acionamento) |
-| Slack | canal do cliente, se houver; alertas operacionais seguem no #control-desk com `[Nome]` |
+| Slack | canal do cliente, se houver; alertas operacionais seguem no #control-desk com `[NOME]` |
 | Meta / WABA | HSMs do cliente aprovados, linha de WhatsApp definida |
 | Render | nada por cliente além do kill switch `PACING_CUSTO_OFF` |
