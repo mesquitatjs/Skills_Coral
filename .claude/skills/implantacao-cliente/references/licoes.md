@@ -39,3 +39,7 @@ Cada lição saiu de um erro real ou de uma decisão do usuário. Leia antes de 
 18. **O board do fluxo é a fonte de verdade.** Os geradores de de-para e templates "driftam". Reconcilie contra o board, não contra o arquivo anterior.
 19. **A homologação revela o que o board não tem.** Na Bull, 93 ligações de teste deram 43 OK e 50 divergentes: um SPT nunca enviado e SPTs fora do board. Extraia a trilha das ligações de teste antes do go-live.
 20. **Escrito à mão é onde se esquece.** Há 6 pontos que são `CASE`/`if` com o nome do cliente: `sql_cliente_campanha`, `ingest_cdr` (aviso), `gerar_home._SQL`, `_FUNIL_SQL`, loader do mailing e passos do workflow. O verificador cobre todos.
+
+## Slack
+
+21. **Todo cliente leva a tag nos canais compartilhados** (02/10/2026). Antes só a Bull era marcada e a Principia ficava implícita. Hoje, em #control-desk e #coral-desk, todo alerta por campanha sai `[NOME] Campanha` em caixa alta (`[PRINCIPIA] Ouro`, `[BULL]`), via `slack_texto.rotulo()`, que lê o cliente de `campanhas.CAMPANHAS`. Alerta global (credencial do BQ, frescor, microfone, CDR Vonex) fica sem tag. Post no canal do próprio cliente (telecom, faturamento) também fica sem tag. Cliente novo herda a regra ao entrar em `campanhas.CAMPANHAS`; mensagens escritas à mão fora do `rotulo()` (heartbeat, planejador, alarme de PTP) precisam da tag no texto.

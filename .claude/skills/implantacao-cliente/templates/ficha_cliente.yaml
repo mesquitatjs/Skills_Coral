@@ -6,7 +6,7 @@
 cliente:
   chave: bull                 # minúsculas, sem acento — vira chave em dicts (clientes_telecom, coral_tema, meta_telecom…)
   CHAVE: BULL                 # maiúsculas — chave das campanhas no coral-bot e filtro ILIKE '%BULL%'
-  nome: Bull                  # nome exibido (painéis, Slack "[Bull]")
+  nome: Bull                  # nome exibido (painéis, Slack "[BULL]")
   cor: "#F472B6"              # cor fixa; não pode colidir com segmento (ouro/bronze/ppay/fidc), semáforo nem coral
   produto: consignado CLT     # descrição curta (aba do Coral Desk, ex.: "consignado · sem leitura")
   inicio_operacao: "2026-10-05"   # 1º dia de discagem real (alertas, orçamento, Home ficam neutros antes)

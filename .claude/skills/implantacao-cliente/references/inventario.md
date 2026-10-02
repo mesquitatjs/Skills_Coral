@@ -69,9 +69,9 @@ Repositórios: **PA** = principia-acionamento · **CB** = coral-bot (Render) · 
 | Técnicos de discagem: parado, mudo, falha técnica, ligação curtíssima, recusa da operadora, falha de leitura | `monitor_discagem.py` | #control-desk | ✅ desde `ALERTAS.desde` |
 | Relativos: queda de ritmo, volume baixo, telefone inválido, bot ocioso (baselines p05/p90) | `monitor_discagem.py` | #control-desk | ✅ desde `relativos_desde` (início + 21 dias) |
 | Funil: nenhum acordo, nenhum CPC, queda de alô | `monitor_campanhas.py` | #control-desk | ✅ relativos. ⚠️ queda de alô exige ≥ 5.000 ligações (não avalia em volume pequeno) |
-| Custo: 🌅 abertura, 🎚️ ajuste, 🟠 orçamento do dia atingido, 🔧 canais ≠ contratado | `app.py` (pacing por custo) | #control-desk `[Nome]` | ✅ desde `ORCAMENTO_CLIENTE.inicio` |
+| Custo: 🌅 abertura, 🎚️ ajuste, 🟠 orçamento do dia atingido, 🔧 canais ≠ contratado | `app.py` (pacing por custo) | #control-desk `[NOME]` | ✅ desde `ORCAMENTO_CLIENTE.inicio` |
 | Spin, mailing atrasado, rota (alerta/troca), fim de volta | `app.py` | #control-desk | — (só OPERADAS) |
-| `[Nome] Mailing` (lote não entrou) | `heartbeat.py` 10:47 | #coral-desk | ✅ 🟠 não crítico |
+| `[NOME] Mailing` (lote não entrou) | `heartbeat.py` 10:47 | #coral-desk | ✅ 🟠 não crítico |
 | Frescor do acionamento (≥ 110 min), vão do microfone (≥ 90 min sem medida) | `app.py` | #control-desk | ✅ (global) |
 | Credencial do BQ (🔴 vencida, ⏳ > 20h) | `bq-credencial.yml` 08:00/12:00 | #coral-desk | ✅ (global) |
 | PTP sem confirmação | `confirmacao-ptp-alarme.yml` 08:40 | #coral-desk | — (só Principia; candidato a peça própria) |

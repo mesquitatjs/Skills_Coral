@@ -51,7 +51,7 @@ PONTOS = [
     (CB, "scripts/campanhas.py", "CAMPANHAS (fonte única de campanhas do bot)", r'"{CHAVE}"\s*:\s*\{{\s*"cpn"\s*:\s*"{cpn}"', None),
     (CB, "scripts/campanhas.py", "OBSERVADAS (não atua no discador)", r'OBSERVADAS\s*=\s*\{{[^}}]*"{CHAVE}"', "observada"),
     (CB, "scripts/campanhas.py", "ALERTAS (fases técnico/relativo)", r'"{CHAVE}"\s*:\s*\{{\s*"desde"', None),
-    (CB, "scripts/slack_texto.py", "NOMES (rótulo [Nome] no Slack)", r'"{CHAVE}"\s*:\s*"{nome}"', None),
+    (CB, "scripts/slack_texto.py", "NOMES (tag [NOME] no Slack)", r'"{CHAVE}"\s*:\s*"{nome}"', None),
     (CB, "scripts/monitor_campanhas.py", "CASE do _FUNIL_SQL (funil/bi_snapshots)", r"ILIKE '%{CHAVE}%'\s+THEN '{CHAVE}'", None),
     (CB, "scripts/pacing_custo.py", "ORCAMENTO_CLIENTE (pacing por custo)", r'"{CHAVE}"\s*:\s*\{{\s*"cliente"\s*:\s*"{chave}"', "orcamento"),
     (CB, "scripts/qa_acordos/ocs_lib.py", "CAMPANHAS do QA de acordos", r'"{cpn}"\s*:\s*"{nome}"', None),
