@@ -17,6 +17,9 @@ perderem entre sessões. Auto-descobertos via `.claude/skills/` e `.claude/agent
   painéis e alertas nos 3 repositórios, em ondas → verificador de cobertura (gate) →
   go-live com checagens agendadas. Construída a partir da implantação da Bull (set–out/2026).
 - **ucc-precificacao** — precifica cliente no modelo UCC (planilha interna → proposta).
+- **deck-comercial** — *mora no `mesquitatjs/projetos_coral`* (`.claude/skills/deck-comercial/`), junto
+  do gerador do deck comercial: quem abre sessão naquele repositório já tem a skill. Não duplicar aqui
+  (fonte única). Monta a apresentação comercial da Coral para um cliente novo no layout oficial.
 
 ## Subagents (`.claude/agents/`)
 - **qa-speech-analytics** — despacha uma investigação de QA/Speech Analytics de ponta a ponta
