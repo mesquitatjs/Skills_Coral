@@ -102,6 +102,7 @@ Siga `references/board-figjam.md`. Resumo:
 
 1. Crie o arquivo (ou duplique o da Vale) e abra sessão com `create_session`. Toda escrita no board é por `use_figma`.
 2. **3 seções, nesta ordem:** `1 · Como ler e mapa` · `2 · Jornadas por situação` · `3 · Falas da Córa na ligação`.
+   A seção 1 fecha com a tabela **Variáveis da ligação** (variável · o que é · de onde vem · onde aparece).
 3. Na seção 3, blocos por etapa com código (A identificar quem atendeu · B validar identidade e abrir · C/D/E
    negociação por situação · F encerramentos). Cada caixa tem **um** cenário e um código (`C04`).
 4. Objeções em tabela "**O cliente diz / A Córa responde / Depois**", uma linha por objeção.
@@ -174,7 +175,7 @@ novos, resultados da campanha e o registro do acordo são da Sinergy e entram co
 - [ ] dossiê, canal, data request e regras do produto lidos; dúvidas que travam o desenho listadas
 - [ ] pesquisa + raia + avaliação de CX por situação
 - [ ] board em 3 seções; um cenário por caixa; variáveis `[x]` em negrito; varredura de sobreposição e saídas
-- [ ] seção 1 com "o que a Córa nunca diz" e o mapa
+- [ ] seção 1 com "o que a Córa nunca diz", o mapa e a tabela **Variáveis da ligação** batendo com as falas
 - [ ] artefato de dúvidas publicado, cada dúvida ligada à caixa
 - [ ] gerador de mapa → JSON; personas; rubrica; teste sem modelo; teste com modelo (2 rodadas) verde
 - [ ] telas da demo com as situações; merge na `claude/demo-voz`; deploy; teste pelo link em todos os cenários
