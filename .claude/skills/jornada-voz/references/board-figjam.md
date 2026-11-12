@@ -7,7 +7,7 @@ sessão (`create_session` com o fileKey). Leia a skill `figma-use` antes do prim
 
 | Seção | O que tem | Quem lê |
 |---|---|---|
-| `1 · Como ler e mapa` | legenda de formas, cores e setas · **mapa das situações** (por onde o cliente passa conforme muda a situação, com CPFs por caixa quando houver foto) · o que a Córa nunca diz | cliente, na primeira leitura |
+| `1 · Como ler e mapa` | legenda de formas, cores e setas · **mapa das situações** (por onde o cliente passa conforme muda a situação, com CPFs por caixa quando houver foto) · o que a Córa nunca diz · regras da conversa · **Variáveis da ligação** (tabela, ver abaixo) | cliente, na primeira leitura |
 | `2 · Jornadas por situação` | uma jornada por situação, em **raias** (cliente · ligação da Córa · cliente-empresa · sistema), correndo no tempo da esquerda para a direita | cliente e produto |
 | `3 · Falas da Córa na ligação` | tudo o que a Córa fala, palavra por palavra, por etapa e por situação, com as objeções em tabela | cliente, Sinergy (via IVR) e quem escreve os prompts |
 
@@ -65,6 +65,28 @@ prompt como `* <objeção> (SPT n): "<fala>"`.
 - Um script de varredura ao fim de cada rodada: todas as ocorrências de `[...]` em negrito, nenhuma `(data)`,
   `{x}` ou nome fora da lista.
 
+### Bloco "Variáveis da ligação" (obrigatório na seção 1)
+
+Toda jornada tem, na seção 1, abaixo do mapa, um bloco com **todas** as variáveis que aparecem nas falas. Modelo:
+FazCred (`projetos_coral/fazcred/`, board `xRP4BNX9RJ8zxVigDnMQMQ`, 12/11/2026).
+
+- Título `Variáveis da ligação` (Inter Medium 48) e uma linha de contexto (Inter Regular 26): "Tudo o que aparece em
+  [colchetes] nas falas. A Córa troca cada variável pelo valor deste cliente, nesta ligação. Valores e datas são
+  falados por extenso."
+- **Tabela FigJam** (não caixas), cabeçalho escuro, 4 colunas: **Variável** (em negrito) · **O que é** (uma frase,
+  em linguagem do cliente, com exemplo quando ajuda: "por extenso (ex.: agosto e setembro)") · **De onde vem**
+  (carteira do cliente · consulta da dívida · simulação/oferta · recálculo antes de fechar · calendário · resposta do
+  cliente na ligação) · **Onde aparece** (os códigos das caixas, ou "todas as ofertas dos blocos B e C").
+- Variável cujo valor ainda depende do cliente leva o número da dúvida na coluna **De onde vem** ("carteira (dúvida D13)").
+- Uma linha por variável; par que só existe junto (`[valor_1] · [valor_2]`) pode dividir a linha.
+- A coluna **Onde aparece** sai do gerador (varrer as falas das caixas e das tabelas), nunca escrita à mão.
+- Larguras de referência: 520 · 1400 · 900 · 1200.
+- As mesmas definições vão para o gerador (`variaveis_def` no mapa/JSON: nome → [o que é, de onde vem]), para a
+  demo, o prompt e o board usarem o mesmo texto. Variável nova no board = linha nova na tabela e no gerador, na
+  mesma rodada.
+- Na varredura de variáveis, conferir também: toda variável usada nas falas está na tabela, e a tabela não tem
+  variável que nenhuma fala usa.
+
 ## O que nunca entra no board
 
 - Nome de nó, SPT, `node_saida`, `#var_`, Sinergy, OCS, CobranSaaS, nome de tabela. Os códigos `A01` são a única
@@ -79,7 +101,8 @@ prompt como `* <objeção> (SPT n): "<fala>"`.
    reorganização).
 2. **Saídas:** toda decisão com os dois ramos ligados; toda fala sem conector de saída é fim e tem despedida.
 3. **Termos:** varrer os textos pela lista de termos internos e por "atendente/transferir/humano".
-4. **Variáveis:** lista fechada, colchetes, negrito.
+4. **Variáveis:** lista fechada, colchetes, negrito, e a tabela **Variáveis da ligação** da seção 1 bate com as falas
+   (nenhuma faltando, nenhuma sobrando).
 5. **Leitura de cliente:** nomes de etapa em linguagem de gente ("7 dias do novo emprego", não "R+7"; "com garantia
    do FGTS", não "contrato novo").
 6. **Share:** liberar o acesso por link antes de mandar. Quem abre vê a última versão; não há "pinned" no FigJam, mas
