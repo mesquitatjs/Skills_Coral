@@ -19,8 +19,8 @@ ofertas e as datas) e `bull/DICIONARIO_Variaveis_Jornada.md`.
    `[VALOR_VISTA_RECALCULADO]`).
 5. **Escopo alternativo da mesma oferta ganha sufixo**, não nome novo: a FAZ Cred oferece quitar tudo (nome base) e
    regularizar só as parcelas em atraso (`_REGULARIZAR`).
-6. A tabela **Variáveis da ligação** da seção 1 do board tem a coluna **Nome padrão** (`Bull` · `Bull + sufixo` ·
-   `novo (<cliente>)`), para quem lê saber de onde veio cada nome.
+6. A tabela **Variáveis da ligação** da seção 1 do board tem 3 colunas: **Variável · O que é · Onde aparece**
+   (Gui, 17/11: sem "Nome padrão" e sem "De onde vem"; quem usa cada nome fica neste dicionário).
 
 ## Dicionário
 

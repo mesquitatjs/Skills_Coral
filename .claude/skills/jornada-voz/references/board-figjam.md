@@ -79,15 +79,15 @@ FazCred (`projetos_coral/fazcred/`, board `xRP4BNX9RJ8zxVigDnMQMQ`, 12/11/2026).
 - Título `Variáveis da ligação` (Inter Medium 48) e uma linha de contexto (Inter Regular 26): "Tudo o que aparece em
   [colchetes] nas falas. A Córa troca cada variável pelo valor deste cliente, nesta ligação. Valores e datas são
   falados por extenso."
-- **Tabela FigJam** (não caixas), cabeçalho escuro, 5 colunas: **Variável** (em negrito) · **Nome padrão** (`Bull` · `Bull + sufixo` · `novo (<cliente>)`) · **O que é** (uma frase,
-  em linguagem do cliente, com exemplo quando ajuda: "por extenso (ex.: agosto e setembro)") · **De onde vem**
-  (carteira do cliente · consulta da dívida · simulação/oferta · recálculo antes de fechar · calendário · resposta do
-  cliente na ligação) · **Onde aparece** (os códigos das caixas, ou "todas as ofertas dos blocos B e C").
-- Variável cujo valor ainda depende do cliente leva o número da dúvida na coluna **De onde vem** ("carteira (dúvida D13)").
+- **Tabela FigJam** (não caixas), cabeçalho escuro, 3 colunas (Gui, 17/11): **Variável** (em negrito) · **O que é**
+  (uma frase, em linguagem do cliente, com exemplo quando ajuda: "por extenso (ex.: agosto e setembro)") · **Onde
+  aparece** (os códigos das caixas, ou "todas as ofertas dos blocos B e C"). Sem "Nome padrão" e sem "De onde vem":
+  a origem de cada nome fica no dicionário (`variaveis.md`).
+- Variável cujo valor ainda depende do cliente leva o número da dúvida na coluna **O que é** ("… (dúvida D13)").
 - Uma linha por variável; par que só existe junto (`[valor_1] · [valor_2]`) pode dividir a linha.
 - A coluna **Onde aparece** sai do gerador (varrer as falas das caixas e das tabelas), nunca escrita à mão.
-- Larguras de referência: 520 · 260 · 1140 · 900 · 1200.
-- As mesmas definições vão para o gerador (`variaveis_def` no mapa/JSON: nome → [o que é, de onde vem]), para a
+- Larguras de referência: 520 · 1400 · 1200.
+- As mesmas definições vão para o gerador (`variaveis_def` no mapa/JSON: nome → [o que é, …]), para a
   demo, o prompt e o board usarem o mesmo texto. Variável nova no board = linha nova na tabela e no gerador, na
   mesma rodada.
 - Na varredura de variáveis, conferir também: toda variável usada nas falas está na tabela, e a tabela não tem
