@@ -25,6 +25,7 @@ conferido com o cliente.
 | Arquivo | Para quê |
 |---|---|
 | `references/board-figjam.md` | as 3 seções, os cartões, os códigos, as cores, a tabela "O cliente diz / A Córa responde / Depois", o que nunca entra no board |
+| `references/variaveis.md` | ⛔ o dicionário de variáveis (padrão da Bull, 17/11): o nome de cada conceito, quem já usa e os nomes aposentados. Abrir antes de escrever a primeira fala |
 | `references/regras-de-fala.md` | as regras de fala e de negociação que valem para toda jornada (as que vieram do cliente e as que vieram do teste com o modelo) |
 | `references/demo.md` | como o fluxo vira demo: gerador, mapa, personas, prompts no formato da Sinergy, testes, deploy, teste pelo link |
 | `references/ivr-sinergy.md` | como gerar o `.ivr`, o que se homologa aqui e o que fica com a Sinergy (ids, campanha, registro do acordo), chamado e plano de testes |
@@ -42,8 +43,10 @@ conferido com o cliente.
    "operador" ou "transferência para humano" em fala, caixa, prompt ou doc.
 3. **Um cenário por caixa, em toda etapa.** À vista e parcelado, sim e não, demitido e ativo: caixas separadas. Caixa com
    dois cenários é onde o cliente para de entender e a Sinergy constrói errado.
-4. **Variável sempre em `[colchetes]` e em negrito**, com um nome só por conceito. Datas são só `[data_curta]` e
-   `[data_longa]`. Nunca `(data)`, `{data}`, `[data_max]` e `[data_longa]` para a mesma coisa.
+4. **Variável no padrão da Bull, sempre em `[COLCHETES]` e em negrito**, um nome só por conceito: `[PRIMEIRO_NOME]`,
+   `[VALOR_VISTA]`, `[QTD_PARCELAS]`, `[DATA_PADRAO]`, `[DATA_MAXIMA]`… Antes de criar variável, confira o dicionário
+   em `references/variaveis.md`; conceito novo entra lá no mesmo dia. Na demo e no `.ivr`, o mesmo nome em minúsculas
+   (`{@valor_vista}`). Nunca `(data)`, `{data}`, `[data_max]` e `[DATA_MAXIMA]` para a mesma coisa.
 5. **Ofertas fixas.** A Córa oferece o que está no mailing: valores das ofertas e as duas datas. Não negocia data
    livre, não monta parcela com valor que o cliente disse, não pergunta o dia do salário. Valor do cliente abaixo da
    oferta vira a oferta mais próxima, e a conversa continua (não encerra).
@@ -107,7 +110,7 @@ Siga `references/board-figjam.md`. Resumo:
    negociação por situação · F encerramentos). Cada caixa tem **um** cenário e um código (`C04`).
 4. Objeções em tabela "**O cliente diz / A Córa responde / Depois**", uma linha por objeção.
 5. Ao fim de cada rodada de edição: varrer sobreposição de caixas, conferir que toda saída tem destino, que não há
-   termo interno, que toda variável está em `[colchetes]` e negrito.
+   termo interno, que toda variável está em `[COLCHETES]`, em negrito e no dicionário.
 6. Revisão final antes de mandar ao cliente: leia o board como ele vai ler. Nomes de etapa em linguagem de gente, os
    códigos ficam. Libere o **Share** do arquivo antes de mandar o link (não é automático).
 
@@ -174,7 +177,7 @@ novos, resultados da campanha e o registro do acordo são da Sinergy e entram co
 
 - [ ] dossiê, canal, data request e regras do produto lidos; dúvidas que travam o desenho listadas
 - [ ] pesquisa + raia + avaliação de CX por situação
-- [ ] board em 3 seções; um cenário por caixa; variáveis `[x]` em negrito; varredura de sobreposição e saídas
+- [ ] board em 3 seções; um cenário por caixa; variáveis `[X]` do dicionário, em negrito; varredura de sobreposição e saídas
 - [ ] seção 1 com "o que a Córa nunca diz", o mapa e a tabela **Variáveis da ligação** batendo com as falas
 - [ ] artefato de dúvidas publicado, cada dúvida ligada à caixa
 - [ ] gerador de mapa → JSON; personas; rubrica; teste sem modelo; teste com modelo (2 rodadas) verde

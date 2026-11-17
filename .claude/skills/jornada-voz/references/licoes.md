@@ -13,7 +13,8 @@ Ler antes de desenhar o próximo. Cada uma custou pelo menos uma rodada.
 3. **Um cenário por caixa.** O board de C/D/E nasceu com "à vista ou parcelado" na mesma caixa. Quebrar depois de
    publicado custou uma reorganização inteira da seção 3. Nasça quebrado.
 4. **Variável com um nome só.** `(data)`, `{data_curta}`, `[data_max]` conviveram no mesmo board. Padronizar depois
-   exigiu varredura em 247 caixas.
+   exigiu varredura em 247 caixas. Desde 17/11 os nomes vêm do dicionário único (`variaveis.md`, padrão da Bull); a
+   FAZ Cred foi migrada inteira (board, fraseologia, demo) numa rodada.
 5. **Valor abaixo do mínimo não encerra.** A primeira versão encerrava a ligação; a regra certa é enquadrar na
    oferta mais próxima e seguir.
 6. **Seções de rascunho confundem o cliente.** Sete seções viraram três antes de mandar o link. O cliente vê uma

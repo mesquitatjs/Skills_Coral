@@ -57,13 +57,19 @@ prompt como `* <objeção> (SPT n): "<fala>"`.
 
 ## Variáveis
 
-- Sempre `[nome]`, entre colchetes e em **negrito** (Inter Bold via `setRangeFontName` no intervalo). O resto do
-  cartão fica Inter Medium.
-- Uma variável por conceito, com o mesmo nome em todas as caixas. Na Vale: `[nome] [valor] [empresa] [mes]
-  [diferenca] [n] [dia] [data_curta] [data_longa] [vencimento] [contratacao]`.
-- Datas: **só** `[data_curta]` e `[data_longa]`. A data máxima do pagamento é a longa; não existe `[data_max]`.
-- Um script de varredura ao fim de cada rodada: todas as ocorrências de `[...]` em negrito, nenhuma `(data)`,
-  `{x}` ou nome fora da lista.
+⛔ **Padrão único (Gui, 17/11/2026): os nomes da Bull.** Antes de escrever a primeira fala, abra o dicionário em
+`references/variaveis.md` (cópia de `projetos_coral/fluxos-voz/PADRAO_Variaveis_Jornada.md`, que é a fonte).
+
+- No board: `[NOME_EM_MAIUSCULAS]`, entre colchetes e em **negrito** (Inter Bold via `setRangeFontName` no
+  intervalo). O resto do cartão fica Inter Medium. Na demo e no `.ivr`: o mesmo nome em minúsculas, `{@valor_vista}`.
+- Um nome por conceito, o mesmo em todas as caixas. Conceito que já está no dicionário usa o nome de lá
+  (`[PRIMEIRO_NOME]`, `[VALOR_VISTA]`, `[QTD_PARCELAS]`, `[VALOR_PARCELA]`, `[DATA_PADRAO]`, `[DATA_MAXIMA]`…).
+  Conceito novo ganha nome no mesmo estilo e entra no dicionário na mesma rodada.
+- Nome igual só para significado igual; escopo alternativo da mesma oferta ganha sufixo (`_REGULARIZAR`).
+- Datas: `[DATA_PADRAO]` (a data da oferta) e `[DATA_MAXIMA]` (a mais longa, quando há segunda data). Nunca
+  `(data)`, `{data}`, `[data_max]`, `[DATA_LIMITE]`.
+- Um script de varredura ao fim de cada rodada: todas as ocorrências de `[...]` em negrito, nenhuma em minúsculas,
+  `(data)`, `{x}` ou nome fora do dicionário.
 
 ### Bloco "Variáveis da ligação" (obrigatório na seção 1)
 
@@ -73,14 +79,14 @@ FazCred (`projetos_coral/fazcred/`, board `xRP4BNX9RJ8zxVigDnMQMQ`, 12/11/2026).
 - Título `Variáveis da ligação` (Inter Medium 48) e uma linha de contexto (Inter Regular 26): "Tudo o que aparece em
   [colchetes] nas falas. A Córa troca cada variável pelo valor deste cliente, nesta ligação. Valores e datas são
   falados por extenso."
-- **Tabela FigJam** (não caixas), cabeçalho escuro, 4 colunas: **Variável** (em negrito) · **O que é** (uma frase,
+- **Tabela FigJam** (não caixas), cabeçalho escuro, 5 colunas: **Variável** (em negrito) · **Nome padrão** (`Bull` · `Bull + sufixo` · `novo (<cliente>)`) · **O que é** (uma frase,
   em linguagem do cliente, com exemplo quando ajuda: "por extenso (ex.: agosto e setembro)") · **De onde vem**
   (carteira do cliente · consulta da dívida · simulação/oferta · recálculo antes de fechar · calendário · resposta do
   cliente na ligação) · **Onde aparece** (os códigos das caixas, ou "todas as ofertas dos blocos B e C").
 - Variável cujo valor ainda depende do cliente leva o número da dúvida na coluna **De onde vem** ("carteira (dúvida D13)").
 - Uma linha por variável; par que só existe junto (`[valor_1] · [valor_2]`) pode dividir a linha.
 - A coluna **Onde aparece** sai do gerador (varrer as falas das caixas e das tabelas), nunca escrita à mão.
-- Larguras de referência: 520 · 1400 · 900 · 1200.
+- Larguras de referência: 520 · 260 · 1140 · 900 · 1200.
 - As mesmas definições vão para o gerador (`variaveis_def` no mapa/JSON: nome → [o que é, de onde vem]), para a
   demo, o prompt e o board usarem o mesmo texto. Variável nova no board = linha nova na tabela e no gerador, na
   mesma rodada.
