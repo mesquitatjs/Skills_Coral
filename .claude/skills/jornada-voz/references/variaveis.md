@@ -17,6 +17,9 @@ ofertas e as datas) e `bull/DICIONARIO_Variaveis_Jornada.md`.
 4. **Nome igual só para significado igual.** Se o conceito do cliente é outro, o nome é outro, mesmo que pareça
    parecido (ex.: `[VALOR_ATUALIZADO]` é a dívida com juros e multa; o à vista recalculado no fechamento é
    `[VALOR_VISTA_RECALCULADO]`).
+4.1 **A Córa não fala de desconto** (Gui, 17/11, o padrão da Bull): nem percentual, nem valor em reais. A oferta diz só
+   o valor a pagar, que já vem com o desconto aplicado. Por isso não existe variável de desconto no padrão, e a
+   integração não precisa mandar nada além do valor de cada opção.
 5. **Escopo alternativo da mesma oferta ganha sufixo**, não nome novo: a FAZ Cred oferece quitar tudo (nome base) e
    regularizar só as parcelas em atraso (`_REGULARIZAR`).
 6. A tabela **Variáveis da ligação** da seção 1 do board tem 3 colunas: **Variável · O que é · Onde aparece**
@@ -43,14 +46,12 @@ ofertas e as datas) e `bull/DICIONARIO_Variaveis_Jornada.md`.
 | `[VALOR_ATUALIZADO]` | Dívida com juros e multa | Bull |
 | `[VALOR_PARCELA_ANTIGA]` | Valor da parcela mais antiga | Bull |
 | **Ofertas** | | |
-| `[VALOR_VISTA]` | Valor à vista oferecido, já com desconto quando houver | Bull · FAZ Cred |
-| `[DESCONTO]` | Percentual de desconto do à vista | FAZ Cred (novo) |
+| `[VALOR_VISTA]` | Valor à vista oferecido, já com o desconto aplicado (na integração, o `total_discounted_amount`) | Bull · FAZ Cred |
 | `[VALOR_ENTRADA]` | Entrada do parcelado | Bull |
 | `[QTD_PARCELAS]` | Número de parcelas da opção oferecida | Bull · FAZ Cred |
 | `[VALOR_PARCELA]` | Valor de cada parcela da opção oferecida | Bull · FAZ Cred |
-| `[DESCONTO_PARCELADO]` | Percentual de desconto do parcelado | FAZ Cred (novo) |
 | `[VALOR_VISTA_RECALCULADO]` | À vista recalculado no fechamento, quando mudou desde a oferta | FAZ Cred (novo) |
-| `[..._REGULARIZAR]` | A mesma oferta, só sobre as parcelas em atraso: `[VALOR_VISTA_REGULARIZAR]`, `[DESCONTO_REGULARIZAR]`, `[QTD_PARCELAS_REGULARIZAR]`, `[VALOR_PARCELA_REGULARIZAR]` | FAZ Cred |
+| `[..._REGULARIZAR]` | A mesma oferta, só sobre as parcelas em atraso: `[VALOR_VISTA_REGULARIZAR]`, `[QTD_PARCELAS_REGULARIZAR]`, `[VALOR_PARCELA_REGULARIZAR]` | FAZ Cred |
 | **Datas** | | |
 | `[DATA_PADRAO]` | Data da oferta: pagamento à vista e entrada do parcelado | Bull · FAZ Cred |
 | `[DATA_MAXIMA]` | Segunda data, a mais longa, oferecida quando o cliente pede outra | Bull · FAZ Cred |
@@ -82,6 +83,7 @@ ofertas e as datas) e `bull/DICIONARIO_Variaveis_Jornada.md`.
 | `[nome]` | `[PRIMEIRO_NOME]` | Vale |
 | `[data_curta]` · `[data_longa]` | `[DATA_PADRAO]` · `[DATA_MAXIMA]` | Vale (skill `jornada-voz` até 17/11) |
 | `[n]` | `[QTD_PARCELAS]` | Vale |
+| `[DESCONTO]` · `[DESCONTO_PARCELADO]` · `[DESCONTO_REGULARIZAR]` | não se fala de desconto (regra 4.1) | FAZ Cred até 17/11 |
 
 ⚠️ **O board da Bull ainda mistura v1 e v2** (`[DATA_LIMITE]` × `[DATA_PADRAO]`, `[VALOR_ATUALIZADO]` × `[VALOR_VISTA]`
 no lugar do à vista). É da frente Bull: o padrão acima segue a v2 nas ofertas e datas, e a limpeza do board de lá fica
@@ -91,9 +93,9 @@ os fluxos novos e para as migrações que forem pedidas.
 ## De-para aplicado na FAZ Cred (17/11)
 
 `[nome]`→`[PRIMEIRO_NOME]` · `[valor_avista]`→`[VALOR_VISTA]` · `[n]`→`[QTD_PARCELAS]` · `[valor_parcela]`→`[VALOR_PARCELA]`
-· `[data_entrada]`→`[DATA_PADRAO]` · `[data_entrada_2]`→`[DATA_MAXIMA]` · `[desconto]`→`[DESCONTO]` ·
-`[desconto_parcelado]`→`[DESCONTO_PARCELADO]` · `[valor_regularizar]`→`[VALOR_VISTA_REGULARIZAR]` ·
-`[desconto_regularizar]`→`[DESCONTO_REGULARIZAR]` · `[n_regularizar]`→`[QTD_PARCELAS_REGULARIZAR]` ·
+· `[data_entrada]`→`[DATA_PADRAO]` · `[data_entrada_2]`→`[DATA_MAXIMA]` · `[valor_regularizar]`→`[VALOR_VISTA_REGULARIZAR]` ·
+`[n_regularizar]`→`[QTD_PARCELAS_REGULARIZAR]` ·
 `[parcela_regularizar]`→`[VALOR_PARCELA_REGULARIZAR]` · `[valor_atualizado]`→`[VALOR_VISTA_RECALCULADO]` ·
 `[valor_acordo]`→`[VALOR_PARCELA_ACORDO]` · `[vencimento_acordo]`→`[VENCIMENTO_ACORDO]` · `[data_quebra]`→`[DATA_QUEBRA]`.
 Aplicado no board, na fraseologia, no painel de dúvidas e na demo (`{@...}` e colunas do mailing simulado).
+No mesmo dia, as três variáveis de desconto saíram (regra 4.1): a FAZ Cred passou a falar só o valor a pagar, como a Bull.
