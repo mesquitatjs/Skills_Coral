@@ -51,6 +51,10 @@ com dois Então").
 
 ## Ofertas fixas (regra do cliente que virou regra do modelo)
 
+- **Sem falar de desconto** (Gui, 17/11, padrão da Bull): a oferta diz só o valor a pagar, que já vem com o desconto
+  aplicado (`[VALOR_VISTA]` = o `total_discounted_amount` da API). Nem percentual, nem valor do desconto em reais, e
+  nenhuma variável de desconto no board.
+
 - Datas só `[DATA_PADRAO]` (amanhã; se amanhã for domingo, segunda) e `[DATA_MAXIMA]` (D+3, que é também a data
   máxima). Nunca perguntar o dia do salário ou do benefício.
 - "Amanhã" é **sempre** a data curta e nunca "outra data". "Sábado", "dia 7", "segunda" se convertem a partir de
